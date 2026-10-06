@@ -13,9 +13,9 @@
 //! epoch, stops playback, and every in-flight task notices and quits.
 
 use crate::audio::{start_mic, MicHandle, Speaker, SpeakerCmd};
-use crate::providers::assemblyai::{self, SttEvent};
-use crate::providers::gemini::{Gemini, HistoryTurn, ImagePart};
-use crate::providers::sarvam::SarvamTts;
+use luma_net::assemblyai::{self, SttEvent};
+use luma_net::gemini::{Gemini, HistoryTurn, ImagePart};
+use luma_net::sarvam::SarvamTts;
 use crate::screen::{self, CaptureOptions, Snapshot};
 use crate::settings::{get_key, Prefs, Provider};
 use crate::AppState;

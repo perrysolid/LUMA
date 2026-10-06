@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Board update.key</title>
+    <style>
+      body { margin: 0; background: #fff; font-family: -apple-system, system-ui, sans-serif; color: #111827; }
+      h1 { margin: 40px 60px 10px; font-size: 30px; }
+      .sub { margin: 0 60px; color: #6b7280; }
+      .chart { position: absolute; top: 170px; width: 600px; height: 560px; }
+      .chart h2 { font-size: 17px; margin: 0 0 10px; }
+      svg text { font-size: 13px; fill: #4b5563; }
+    </style>
+  </head>
+  <body data-app="Keynote">
+    <h1>Growth this year</h1>
+    <p class="sub">Revenue and active users, Q1–Q4</p>
+
+    <div class="chart" style="left: 60px" data-truth="chart_revenue" data-label="Revenue chart">
+      <h2>Revenue ($M)</h2>
+      <svg width="600" height="500">
+        <line x1="50" y1="440" x2="580" y2="440" stroke="#9ca3af" />
+        <line x1="50" y1="20" x2="50" y2="440" stroke="#9ca3af" />
+        <text x="10" y="444">0</text><text x="10" y="234">10</text><text x="10" y="34">20</text>
+        <rect data-truth="bar_q1" data-label="Q1 bar" x="90" y="300" width="80" height="140" fill="#6366f1" />
+        <rect data-truth="bar_q2" data-label="Q2 bar" x="210" y="230" width="80" height="210" fill="#6366f1" />
+        <rect data-truth="bar_q3" data-label="Q3 bar" x="330" y="70" width="80" height="370" fill="#6366f1" />
+        <rect data-truth="bar_q4" data-label="Q4 bar" x="450" y="150" width="80" height="290" fill="#6366f1" />
+        <text x="115" y="462">Q1</text><text x="235" y="462">Q2</text><text x="355" y="462">Q3</text><text x="475" y="462">Q4</text>
+      </svg>
+    </div>
+
+    <div class="chart" style="left: 760px" data-truth="chart_users" data-label="Users chart">
+      <h2>Weekly active users (k)</h2>
+      <svg width="600" height="500">
+        <line x1="50" y1="440" x2="580" y2="440" stroke="#9ca3af" />
+        <line x1="50" y1="20" x2="50" y2="440" stroke="#9ca3af" />
+        <polyline points="130,380 250,330 370,260 490,120" fill="none" stroke="#10b981" stroke-width="4" />
+        <circle cx="130" cy="380" r="6" fill="#10b981" /><circle cx="250" cy="330" r="6" fill="#10b981" />
+        <circle cx="370" cy="260" r="6" fill="#10b981" /><circle data-truth="users_q4" data-label="Q4 point" cx="490" cy="120" r="6" fill="#10b981" />
+        <text x="120" y="462">Q1</text><text x="240" y="462">Q2</text><text x="360" y="462">Q3</text><text x="480" y="462">Q4</text>
+      </svg>
+    </div>
+    <script type="application/json" id="cases">
+      [
+        { "id": "charts-ambiguous-move", "kind": "ambiguous", "q": "Move that chart a bit to the left." },
+        { "id": "charts-highest-quarter", "kind": "locate", "q": "Which quarter had the highest revenue?", "expect": ["bar_q3"] },
+        { "id": "charts-explain-this", "kind": "refer", "q": "Explain this chart.", "pointer": "chart_users", "expect": ["chart_users"] },
+        { "id": "charts-takeaway", "kind": "explain", "q": "What's the key takeaway of this slide?", "say": ["revenue", "users"] }
+      ]
+    </script>
+    <script src="truth.js"></script>
+  </body>
+</html>

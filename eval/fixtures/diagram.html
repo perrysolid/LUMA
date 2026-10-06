@@ -1,0 +1,47 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Architecture.pptx</title>
+    <style>
+      body { margin: 0; background: #fbfbfd; font-family: -apple-system, system-ui, sans-serif; color: #1d2433; }
+      h1 { position: absolute; left: 60px; top: 34px; margin: 0; font-size: 30px; }
+      .node { position: absolute; padding: 18px 0; width: 170px; text-align: center; border: 2px solid #3f5f8f; border-radius: 10px; background: #e9f0fb; font-weight: 600; font-size: 16px; }
+      .db { border-radius: 50% / 18%; background: #fdf1df; border-color: #a8742b; }
+      svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+      path { stroke: #7c8aa5; stroke-width: 2; fill: none; marker-end: url(#tip); }
+      .note { position: absolute; left: 70px; bottom: 60px; font-size: 14px; color: #667; }
+    </style>
+  </head>
+  <body data-app="Microsoft PowerPoint">
+    <h1>Order platform — architecture</h1>
+    <svg>
+      <defs><marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="#7c8aa5" stroke="none" /></marker></defs>
+      <path d="M244,329 H328" />
+      <path d="M504,329 C564,329 540,189 598,189" />
+      <path d="M504,329 C564,329 540,469 598,469" />
+      <path d="M774,469 H868" />
+      <path d="M1044,469 H1108" />
+      <path d="M687,498 V638" />
+    </svg>
+    <div class="node" data-truth="client" style="left: 72px; top: 300px">Web client</div>
+    <div class="node" data-truth="gateway" style="left: 332px; top: 300px">API Gateway</div>
+    <div class="node" data-truth="auth" style="left: 600px; top: 160px">Auth service</div>
+    <div class="node" data-truth="orders" style="left: 600px; top: 440px">Orders service</div>
+    <div class="node" data-truth="queue" style="left: 870px; top: 440px">Event queue</div>
+    <div class="node db" data-truth="db" style="left: 600px; top: 640px">Orders DB</div>
+    <div class="node" data-truth="email" style="left: 1110px; top: 440px">Email worker</div>
+    <div class="note">All traffic is authenticated at the gateway. Order events are processed asynchronously.</div>
+    <script type="application/json" id="cases">
+      [
+        { "id": "diagram-flow-beginner", "kind": "flow", "q": "Explain this architecture to me like I'm a beginner.",
+          "expect": ["client", "gateway", "auth", "orders", "db", "queue", "email"],
+          "order": ["client", "gateway", "orders", "queue", "email"] },
+        { "id": "diagram-this-queue", "kind": "refer", "q": "What is this?", "pointer": "queue", "expect": ["queue"] },
+        { "id": "diagram-where-db", "kind": "locate", "q": "Where is the database on this slide?", "expect": ["db"] },
+        { "id": "diagram-only-auth", "kind": "locate", "q": "Explain only the part that checks who the user is.", "expect": ["auth"] }
+      ]
+    </script>
+    <script src="truth.js"></script>
+  </body>
+</html>

@@ -7,7 +7,11 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test": "tsc --noEmit && vitest run && cargo test --workspace --exclude luma",
+    "demo": "vite",
+    "eval:render": "node eval/render.mjs",
+    "eval": "cargo run -q -p luma-eval --release --"
   },
   "dependencies": {
     "@tauri-apps/api": "^2"

@@ -1,0 +1,15 @@
+[package]
+name = "luma-eval"
+version = "0.1.0"
+edition = "2021"
+description = "Grounding and explanation eval for LUMA (ScreenSpot-style hit rate, IoU, flow order, ambiguity)."
+
+[dependencies]
+luma-core = { path = "../luma-core" }
+luma-net = { path = "../luma-net" }
+anyhow = "1"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }

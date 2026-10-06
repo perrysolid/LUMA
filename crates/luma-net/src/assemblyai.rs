@@ -40,7 +40,7 @@ pub async fn transcribe(
 ) -> Result<String> {
     let url = format!(
         "wss://streaming.assemblyai.com/v3/ws?sample_rate={}&encoding=pcm_s16le&speech_model={}&max_turn_silence=4000",
-        crate::audio::STT_RATE,
+        crate::STT_RATE,
         model
     );
     let mut req = url.into_client_request()?;

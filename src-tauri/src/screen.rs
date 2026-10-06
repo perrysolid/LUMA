@@ -4,8 +4,9 @@
 //! converts everything into `luma_core::geometry` types.
 
 use anyhow::{anyhow, Context, Result};
-use image::{imageops::FilterType, DynamicImage, RgbaImage};
-use luma_core::geometry::{display_at, view_to_image_px, Capture, Display, Point, Rect, SentImage, MODEL_NORM};
+use image::DynamicImage;
+use luma_core::geometry::{display_at, Display, Point, Rect};
+pub use luma_net::vision::EncodedImage;
 use tauri::{AppHandle, Runtime};
 
 /// Enumerate displays in OS input space.
@@ -61,15 +62,9 @@ pub fn active_window() -> Option<ActiveWindow> {
     Some(ActiveWindow { app: w.app_name, title: w.title })
 }
 
-pub struct EncodedImage {
-    pub sent: SentImage,
-    pub jpeg: Vec<u8>,
-}
-
 /// Everything captured at the moment the user invoked LUMA.
 pub struct Snapshot {
     pub displays: Vec<Display>,
-    pub display: Display,
     pub images: Vec<EncodedImage>,
     pub window: ActiveWindow,
     /// Pointer in image-1 model coordinates `(y, x)`.
@@ -96,49 +91,21 @@ pub fn snapshot(displays: Vec<Display>, pointer: Option<Point>, opts: &CaptureOp
         .clone();
     let monitors = xcap::Monitor::all().map_err(|e| anyhow!("listing displays: {e}"))?;
     let monitor = monitors.get(display.index).context("display disappeared")?;
-    let raw: RgbaImage = monitor
+    let raw = monitor
         .capture_image()
         .map_err(|e| anyhow!("screen capture failed (is Screen Recording permission granted?): {e}"))?;
-    let capture = Capture { display_index: display.index, width_px: raw.width(), height_px: raw.height() };
     let full = DynamicImage::ImageRgba8(raw);
-
-    let mut images = Vec::new();
-    let sent_full = SentImage::full(capture, opts.max_edge);
-    images.push(EncodedImage { sent: sent_full, jpeg: encode(&full, &sent_full)? });
-
-    let pointer_view = pointer.map(|p| display.input_to_view(p)).filter(|p| display.view_bounds().contains(*p));
-    let pointer_norm = pointer_view.and_then(|p| view_to_image_px(p, &sent_full, &display)).map(|px| {
-        (
-            px.y / sent_full.height_px as f64 * MODEL_NORM,
-            px.x / sent_full.width_px as f64 * MODEL_NORM,
-        )
-    });
-
-    if opts.closeup {
-        if let Some(pv) = pointer_view {
-            let (vw, _) = display.view_size();
-            let px_per_pt = capture.width_px as f64 / vw;
-            // ~480 points of context around the pointer, at native resolution
-            let size = (480.0 * px_per_pt).round() as u32;
-            let center = Point::new(pv.x * px_per_pt, pv.y * px_per_pt);
-            let crop = SentImage::crop_around(capture, center, size, 1024);
-            images.push(EncodedImage { sent: crop, jpeg: encode(&full, &crop)? });
-        }
-    }
-
-    Ok(Snapshot { displays, display, images, window: active_window().unwrap_or_default(), pointer_norm })
-}
-
-fn encode(full: &DynamicImage, s: &SentImage) -> Result<Vec<u8>> {
-    let r = s.source_px;
-    let cropped = full.crop_imm(r.x as u32, r.y as u32, r.w as u32, r.h as u32);
-    let img = if cropped.width() != s.width_px || cropped.height() != s.height_px {
-        cropped.resize_exact(s.width_px, s.height_px, FilterType::Triangle)
-    } else {
-        cropped
-    };
-    let mut out = Vec::new();
-    let rgb = img.to_rgb8();
-    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85).encode_image(&rgb)?;
-    Ok(out)
+    let prepared = luma_net::vision::prepare(
+        &full,
+        &display,
+        pointer.map(|p| display.input_to_view(p)),
+        opts.max_edge,
+        opts.closeup,
+    )?;
+    Ok(Snapshot {
+        displays,
+        images: prepared.images,
+        window: active_window().unwrap_or_default(),
+        pointer_norm: prepared.pointer_norm,
+    })
 }

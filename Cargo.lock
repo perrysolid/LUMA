@@ -3090,13 +3090,12 @@ version = "0.1.0"
 dependencies = [
  "active-win-pos-rs",
  "anyhow",
- "base64 0.23.1",
  "env_logger",
- "futures-util",
  "image",
  "keyring",
  "log",
  "luma-core",
+ "luma-net",
  "objc2",
  "reqwest",
  "rodio",
@@ -3106,7 +3105,6 @@ dependencies = [
  "tauri-build",
  "tauri-plugin-global-shortcut",
  "tokio",
- "tokio-tungstenite",
  "xcap",
 ]
 
@@ -3116,6 +3114,36 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "luma-eval"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "image",
+ "luma-core",
+ "luma-net",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "luma-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "futures-util",
+ "image",
+ "luma-core",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
 ]
 
 [[package]]

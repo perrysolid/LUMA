@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
 use tokio::sync::mpsc;
 
-pub const STT_RATE: u32 = 16_000;
+pub use luma_net::STT_RATE;
 /// 100 ms of 16 kHz audio per websocket message (AssemblyAI accepts 50–1000 ms).
 const CHUNK_SAMPLES: usize = 1_600;
 

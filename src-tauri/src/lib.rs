@@ -1,6 +1,5 @@
 mod audio;
 mod companion;
-mod providers;
 mod screen;
 mod settings;
 
