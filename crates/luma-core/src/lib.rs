@@ -3,6 +3,7 @@
 //! Nothing in this crate touches the OS, the network, or a clock, so all of it
 //! is deterministic and unit tested. The Tauri app wires it to real devices.
 
+pub mod action;
 pub mod annotation;
 pub mod audio;
 pub mod geometry;

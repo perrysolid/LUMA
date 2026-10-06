@@ -32,6 +32,7 @@ impl Target {
 pub struct Case {
     pub id: String,
     pub kind: String,
+    #[serde(default)]
     pub q: String,
     #[serde(default)]
     pub pointer: Option<String>,
@@ -41,6 +42,18 @@ pub struct Case {
     pub order: Vec<String>,
     #[serde(default)]
     pub say: Vec<String>,
+    /// agent cases: the goal given to the agent
+    #[serde(default)]
+    pub goal: Option<String>,
+    /// route cases: whether the reply should start a task
+    #[serde(default)]
+    pub task: Option<bool>,
+    /// agent cases: whether the first action must require approval
+    #[serde(default)]
+    pub approval: Option<bool>,
+    /// agent cases: an <open url> containing this also counts as correct
+    #[serde(default)]
+    pub url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +125,10 @@ fn mark_rect(a: &Annotation) -> Option<Rect> {
         | Annotation::Zoom { rect, .. } => Some(*rect),
         _ => None,
     }
+}
+
+pub fn target_hit(fx: &Fixture, id: &str, r: &Rect) -> bool {
+    fx.targets.get(id).is_some_and(|t| hits(r, &t.rect()))
 }
 
 /// A mark hits a target if its centre is inside the target (with a few
@@ -252,6 +269,10 @@ mod tests {
             expect: expect.iter().map(|s| s.to_string()).collect(),
             order: order.iter().map(|s| s.to_string()).collect(),
             say: vec![],
+            goal: None,
+            task: None,
+            approval: None,
+            url: None,
         }
     }
 

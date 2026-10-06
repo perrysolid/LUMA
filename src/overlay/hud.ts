@@ -1,13 +1,15 @@
 // Status pill: makes it obvious when LUMA is listening, looking, thinking or
 // talking. Shown on the display the user is working on.
 
-export type Phase = "idle" | "listening" | "thinking" | "speaking" | "paused" | "error";
+export type Phase = "idle" | "listening" | "thinking" | "speaking" | "acting" | "waiting" | "paused" | "error";
 
 const LABELS: Record<Phase, string> = {
   idle: "",
   listening: "Listening · looking at this screen",
   thinking: "Thinking…",
   speaking: "",
+  acting: "Working on it…",
+  waiting: "Waiting for you: hold the shortcut and say yes or no",
   paused: "Paused — not seeing or listening",
   error: "Something went wrong",
 };
@@ -65,6 +67,10 @@ export class Hud {
   }
 
   caption(text: string) {
+    if (this.phase === "acting" || this.phase === "waiting") {
+      this.setSub(text);
+      return;
+    }
     if (this.phase === "speaking" || this.phase === "thinking") {
       if (this.phase === "thinking") this.setPhase("speaking");
       this.setSub(text);

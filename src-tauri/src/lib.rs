@@ -1,5 +1,7 @@
+mod agent;
 mod audio;
 mod companion;
+mod input;
 mod screen;
 mod settings;
 
@@ -69,13 +71,13 @@ fn ask(app: AppHandle, state: tauri::State<AppState>, question: String) {
 
 #[tauri::command]
 fn stop(app: AppHandle, state: tauri::State<AppState>) {
-    state.companion.interrupt(&app);
+    state.companion.cancel_all(&app);
     state.companion.status(&app, Phase::Idle, None);
 }
 
 #[tauri::command]
 fn clear_session(app: AppHandle, state: tauri::State<AppState>) {
-    state.companion.interrupt(&app);
+    state.companion.cancel_all(&app);
     state.session.lock().unwrap().clear();
     state.companion.status(&app, Phase::Idle, Some("Session cleared.".into()));
 }
@@ -87,7 +89,7 @@ fn set_paused(app: AppHandle, state: tauri::State<AppState>, paused: bool) {
 
 fn set_paused_inner(app: &AppHandle, state: &AppState, paused: bool) {
     if paused {
-        state.companion.interrupt(app);
+        state.companion.cancel_all(app);
     }
     {
         let mut p = state.prefs.lock().unwrap();
@@ -157,6 +159,113 @@ fn spawn_cursor_tracker(app: AppHandle) {
             }
         })
         .expect("cursor thread");
+}
+
+/// Draws a box exactly around the active window and marks the pointer. If the
+/// box hugs the window edges, coordinate mapping is correct on this setup.
+fn check_alignment(app: &AppHandle) {
+    use luma_core::annotation::{Annotation, ShapeKind};
+    use luma_core::geometry::{display_at, Rect};
+    let app = app.clone();
+    std::thread::spawn(move || {
+        // give the menu time to close and focus to return to the user's window
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let Ok(displays) = screen::displays() else { return };
+        sync_overlays(&app, &displays);
+        let _ = app.emit("luma://clear", ());
+        if let Some(w) = screen::active_window() {
+            if let Some(f) = w.frame {
+                if let Some(d) = display_at(&displays, f.center()) {
+                    let tl = d.input_to_view(luma_core::geometry::Point::new(f.x, f.y));
+                    let rect = Rect::new(tl.x, tl.y, f.w / d.input_per_point, f.h / d.input_per_point)
+                        .clamp_to(&d.view_bounds());
+                    let _ = app.emit_to(
+                        format!("overlay-{}", d.index),
+                        "luma://annotate",
+                        Annotation::Shape {
+                            display: d.index,
+                            id: "_align_window".into(),
+                            kind: ShapeKind::Box,
+                            rect,
+                            label: Some(format!("{} window: box should hug its edges", w.app)),
+                        },
+                    );
+                }
+            }
+        }
+        if let Some(p) = screen::pointer(&app, &displays) {
+            if let Some(d) = display_at(&displays, p) {
+                let v = d.input_to_view(p);
+                let _ = app.emit_to(
+                    format!("overlay-{}", d.index),
+                    "luma://annotate",
+                    Annotation::Shape {
+                        display: d.index,
+                        id: "_align_pointer".into(),
+                        kind: ShapeKind::Circle,
+                        rect: Rect::new(v.x - 12.0, v.y - 12.0, 24.0, 24.0),
+                        label: Some("your mouse pointer".into()),
+                    },
+                );
+            }
+        }
+        let summary: Vec<String> = displays
+            .iter()
+            .map(|d| {
+                let (w, h) = d.view_size();
+                format!("{}: {w:.0}×{h:.0} pt @{:.1}x at ({:.0},{:.0})", d.name, d.scale_factor, d.input_frame.x, d.input_frame.y)
+            })
+            .collect();
+        let _ = app.emit("luma://notice", format!("Alignment check. Displays: {}", summary.join("; ")));
+        std::thread::sleep(std::time::Duration::from_secs(8));
+        let _ = app.emit("luma://clear", ());
+    });
+}
+
+/// Clears annotations once they no longer describe what is on screen: the
+/// user switched app/window/tab, or the content scrolled or changed. Uses a
+/// 64×40 thumbnail diff, only while marks are visible and LUMA is not talking
+/// (live captions would otherwise count as changes on systems where overlays
+/// are captured).
+fn spawn_annotation_watcher(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("luma-watch".into())
+        .spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            let st = app.state::<AppState>();
+            let c = &st.companion;
+            if c.is_task_running() {
+                continue;
+            }
+            let (display, key, baseline, quiet_for) = {
+                let w = c.watch.lock().unwrap();
+                let Some(w) = w.as_ref() else { continue };
+                (w.display, w.window_key.clone(), w.baseline.clone(), w.last_mark.elapsed())
+            };
+            let now_key = screen::active_window().map(|w| w.key()).unwrap_or_default();
+            let mut stale = !key.is_empty() && !now_key.is_empty() && now_key != key;
+            if !stale && quiet_for.as_millis() > 600 {
+                if let Ok(img) = screen::capture_display(display) {
+                    let thumb = luma_net::vision::thumbnail(&img);
+                    match baseline {
+                        None => {
+                            if let Some(w) = c.watch.lock().unwrap().as_mut() {
+                                w.baseline = Some(thumb);
+                            }
+                        }
+                        Some(b) if !c.is_speaking() => {
+                            stale = luma_net::vision::changed_fraction(&b, &thumb) > 0.06;
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+            if stale {
+                *c.watch.lock().unwrap() = None;
+                let _ = app.emit("luma://clear", ());
+            }
+        })
+        .expect("watch thread");
 }
 
 /// One transparent, click-through overlay window per display. Called at
@@ -261,10 +370,11 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         None::<&str>,
     )?;
     let clear = MenuItem::with_id(app, "clear", "Forget this session", true, None::<&str>)?;
+    let align = MenuItem::with_id(app, "align", "Check overlay alignment", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit LUMA", true, None::<&str>)?;
     Menu::with_items(
         app,
-        &[&hint, &PredefinedMenuItem::separator(app)?, &open, &pause, &clear, &PredefinedMenuItem::separator(app)?, &quit],
+        &[&hint, &PredefinedMenuItem::separator(app)?, &open, &pause, &clear, &align, &PredefinedMenuItem::separator(app)?, &quit],
     )
 }
 
@@ -320,9 +430,10 @@ pub fn run() {
                             set_paused_inner(app, &st, paused);
                         }
                         "clear" => {
-                            st.companion.interrupt(app);
+                            st.companion.cancel_all(app);
                             st.session.lock().unwrap().clear();
                         }
+                        "align" => check_alignment(app),
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -339,6 +450,7 @@ pub fn run() {
                 Err(e) => log::error!("{e}"),
             }
             spawn_cursor_tracker(handle.clone());
+            spawn_annotation_watcher(handle.clone());
             if !screen::has_screen_permission() {
                 log::warn!("Screen Recording permission missing; LUMA will ask on first use");
             }

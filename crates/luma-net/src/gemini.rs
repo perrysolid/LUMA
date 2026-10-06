@@ -13,6 +13,8 @@ pub struct Gemini {
     pub api_key: String,
     pub model: String,
     pub thinking_level: String,
+    /// "MEDIA_RESOLUTION_HIGH" for precise pointing, MEDIUM/LOW to save tokens.
+    pub media_resolution: &'static str,
 }
 
 pub struct ImagePart<'a> {
@@ -52,10 +54,24 @@ impl Gemini {
             "contents": contents,
             "generationConfig": {
                 "thinkingConfig": {"thinkingLevel": self.thinking_level},
-                "mediaResolution": "MEDIA_RESOLUTION_HIGH",
+                "mediaResolution": self.media_resolution,
                 "maxOutputTokens": 4096,
             },
         })
+    }
+
+    /// Non-streaming convenience: the whole visible answer.
+    pub async fn complete(&self, body: &Value) -> Result<String> {
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let this = self.clone();
+        let body = body.clone();
+        let task = tokio::spawn(async move { this.stream(&body, tx).await });
+        let mut out = String::new();
+        while let Some(d) = rx.recv().await {
+            out.push_str(&d);
+        }
+        task.await.map_err(|e| anyhow!("{e}"))??;
+        Ok(out)
     }
 
     /// Streams visible answer text into `out`. Returns when the response ends.

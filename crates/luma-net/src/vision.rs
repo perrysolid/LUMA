@@ -111,6 +111,24 @@ pub fn encode(full: &DynamicImage, s: &SentImage) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// A 64×40 grayscale fingerprint of a screen, for cheap change detection.
+pub const THUMB_W: u32 = 64;
+pub const THUMB_H: u32 = 40;
+
+pub fn thumbnail(img: &DynamicImage) -> Vec<u8> {
+    img.resize_exact(THUMB_W, THUMB_H, FilterType::Triangle).to_luma8().into_raw()
+}
+
+/// Fraction of thumbnail cells that changed noticeably (0..1). Robust to
+/// small changes such as a blinking caret or a clock.
+pub fn changed_fraction(a: &[u8], b: &[u8]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 1.0;
+    }
+    let changed = a.iter().zip(b).filter(|(x, y)| x.abs_diff(**y) > 24).count();
+    changed as f64 / a.len() as f64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,6 +142,24 @@ mod tests {
         assert_eq!(img.get_pixel(130, 100).0, [236, 32, 160, 255], "ring at r = 15pt * 2");
         // ring near an edge must not panic
         draw_pointer_ring(&mut img, Point::new(1.0, 199.0), 2.0);
+    }
+
+    #[test]
+    fn change_detection_ignores_tiny_changes_and_catches_scrolls() {
+        let base = image::RgbaImage::from_fn(1440, 900, |x, y| {
+            let v = if (y / 30) % 2 == 0 { 230 } else { 40 } as u8;
+            image::Rgba([v, v, v.wrapping_add((x % 7) as u8), 255])
+        });
+        let a = thumbnail(&DynamicImage::ImageRgba8(base.clone()));
+        // a caret blinking somewhere
+        let mut caret = base.clone();
+        for y in 400..420 {
+            caret.put_pixel(700, y, image::Rgba([0, 0, 0, 255]));
+        }
+        assert!(changed_fraction(&a, &thumbnail(&DynamicImage::ImageRgba8(caret))) < 0.02);
+        // content scrolled by 30px: stripes swap
+        let scrolled = image::RgbaImage::from_fn(1440, 900, |x, y| *base.get_pixel(x, (y + 30) % 900));
+        assert!(changed_fraction(&a, &thumbnail(&DynamicImage::ImageRgba8(scrolled))) > 0.3);
     }
 
     #[test]

@@ -59,7 +59,7 @@ async fn main() -> Result<()> {
     // 1. Gemini
     let gemini_key = key(&["LUMA_GEMINI_API_KEY", "GEMINI_API_KEY"]).context("LUMA_GEMINI_API_KEY missing")?;
     let model = std::env::args().nth(1).unwrap_or_else(|| "gemini-3.8-flash".into());
-    let g = Gemini { client: http.clone(), api_key: gemini_key, model: model.clone(), thinking_level: std::env::var("LUMA_THINKING").unwrap_or_else(|_| "low".into()) };
+    let g = Gemini { client: http.clone(), api_key: gemini_key, model: model.clone(), thinking_level: std::env::var("LUMA_THINKING").unwrap_or_else(|_| "low".into()), media_resolution: "MEDIA_RESOLUTION_HIGH" };
     let body = g.build_body(
         "Reply with exactly one short friendly sentence and nothing else.",
         &[],

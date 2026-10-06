@@ -4,7 +4,7 @@
 
 import type { Pt } from "./geometry";
 
-export type BuddyState = "idle" | "listening" | "thinking" | "speaking" | "paused" | "error";
+export type BuddyState = "idle" | "listening" | "thinking" | "speaking" | "acting" | "waiting" | "paused" | "error";
 
 const OFFSET = { x: 14, y: 16 }; // sits just below-right of the real cursor
 const reduceMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
@@ -34,8 +34,14 @@ export class Buddy {
     this.kick();
   }
 
+  /** Annotate-mode cue: a ring around the companion while held long enough. */
+  setMode(mode: "annotate" | "voice") {
+    this.el.classList.toggle("annotate", mode === "annotate");
+  }
+
   setState(s: BuddyState) {
     this.el.dataset.state = s;
+    if (s === "idle" || s === "listening") this.el.classList.remove("annotate");
     this.badge.hidden = !(s === "listening" || s === "thinking");
     if (s === "idle" || s === "error" || s === "paused") this.release();
     if (s === "paused") this.el.hidden = true;

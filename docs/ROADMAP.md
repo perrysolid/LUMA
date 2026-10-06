@@ -15,6 +15,17 @@ Each phase ends buildable, tested, and usable. ✅ done · 🔜 next · ⏳ late
 - ✅ Privacy: keychain keys, excluded apps, pause, forget, content-protected overlays
 - ✅ Eval harness: rendered fixtures, ScreenSpot-style hit rate, IoU, flow order, ambiguity, latency
 
+## Phase 1.5 — Modes, tasks, hygiene (✅)
+- ✅ Voice-only quick press (1280 px, medium media resolution, no drawing) vs annotate long press (full detail + close-up); "always/never" options
+- ✅ Pointer drawn on the images as a ring: "this" questions 100% on the eval
+- ✅ Agent: `<task>` routing, then observe → one action → show → policy → act → verify by screen diff, with up to 25 steps
+- ✅ Actions: click, double/right click, type, keys, scroll, open URL, wait, ask, done, fail
+- ✅ Safety: approval for committing actions (code-enforced keyword policy + model risk flag), never types secrets, http(s) URLs only, stop by pressing the shortcut, on-screen text treated as data
+- ✅ Pausing tasks: spoken yes/no for approvals; answers to the agent's questions resume the task
+- ✅ Stale overlays cleared on window switch or content change (thumbnail diff)
+- ✅ Tray: "Check overlay alignment"
+- ✅ Eval: routing and agent first-step cases; 24/24 on gemini-3.8-flash
+
 ## Phase 2 — Precision grounding 🔜
 - Accessibility snapping. Read the element tree (AXUIElement on macOS, UI
   Automation on Windows) around the pointer and the predicted boxes, and snap a
@@ -31,7 +42,7 @@ Each phase ends buildable, tested, and usable. ✅ done · 🔜 next · ⏳ late
 - "Let me try": after each step, poll cheap screen diffs and re-check only when the screen changes
 - Correct with a pointer and a one-line reason; "Why?", "Go deeper", "Continue from where we left off" (session persisted locally, opt-in)
 
-## Phase 4 — Acting on the computer ⏳
+## Phase 4 — Acting on the computer (core shipped in 1.5; next:)
 - Gemini Computer Use tool (Gemini 3.5+ Flash) for planning; actions executed by LUMA, never by the model directly
 - Executor: AX actions first (`AXPress`, UIA `Invoke`), synthetic input fallback (CGEvent / SendInput)
 - Verify after every action: screen diff plus AX state plus a model check of the expected change. Retry with another strategy, or ask.

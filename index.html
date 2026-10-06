@@ -67,6 +67,18 @@
           <label>Speech-to-text model <input id="stt_model" spellcheck="false" /></label>
           <label>Shortcut (hold to talk) <input id="hotkey" spellcheck="false" /></label>
         </div>
+        <h2>Drawing &amp; doing</h2>
+        <div class="grid">
+          <label>Draw on screen
+            <select id="annotate">
+              <option value="long_press">Only when I hold the shortcut longer (saves tokens)</option>
+              <option value="always">Always</option>
+              <option value="never">Never (voice only)</option>
+            </select>
+          </label>
+          <label>Long press after (seconds) <input id="long_press_s" type="number" min="0.8" max="5" step="0.1" /></label>
+        </div>
+        <label class="check"><input type="checkbox" id="can_act" /> Let LUMA click and type to do tasks I ask for (it asks before anything consequential and never types passwords)</label>
         <label class="check"><input type="checkbox" id="send_closeup" /> Send a close-up of the area around the pointer (sharper answers about small things)</label>
         <div class="row"><button id="save">Save settings</button><span class="saved" id="saved"></span></div>
 

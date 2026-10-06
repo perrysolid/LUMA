@@ -18,7 +18,8 @@ use anyhow::{anyhow, Context, Result};
 use luma_core::annotation::{Annotation, Resolver};
 use luma_core::geometry::{Display, Point, Rect};
 use luma_core::markup::{MarkupParser, Segment};
-use luma_core::prompt::{context_block, TurnContext, SYSTEM_PROMPT};
+use luma_core::action::{assess, parse_action, Action, Risk, AGENT_TAGS};
+use luma_core::prompt::{agent_context, context_block, system_prompt, AgentContext, TurnContext, AGENT_PROMPT};
 use luma_core::session::Level;
 use luma_net::gemini::{Gemini, ImagePart};
 use score::{score_case, Case, CaseResult, Fixture};
@@ -71,7 +72,7 @@ async fn main() -> Result<()> {
         .filter_map(|v| std::env::var(v).ok())
         .find(|k| !k.trim().is_empty())
         .ok_or_else(|| anyhow!("set LUMA_GEMINI_API_KEY in .env (or the environment) to run the eval"))?;
-    let gemini = Gemini { client: reqwest::Client::new(), api_key: key, model: a.model.clone(), thinking_level: a.thinking.clone() };
+    let gemini = Gemini { client: reqwest::Client::new(), api_key: key, model: a.model.clone(), thinking_level: a.thinking.clone(), media_resolution: "MEDIA_RESOLUTION_HIGH" };
     let out = repo_root().join("eval/out");
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&out)
         .with_context(|| "run `node eval/render.mjs` first")?
@@ -101,7 +102,11 @@ async fn main() -> Result<()> {
                 }
             }
             for run in 0..a.repeat {
-                let r = run_case(&gemini, &fx, case, &png, &display, &a).await;
+                let r = match case.kind.as_str() {
+                    "route" => run_route(&gemini, &fx, case, &png, &display).await,
+                    "agent" => run_agent(&gemini, &fx, case, &png, &display).await,
+                    _ => run_case(&gemini, &fx, case, &png, &display, &a).await,
+                };
                 match r {
                     Ok(r) => {
                         println!("{}", r.line());
@@ -132,6 +137,92 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+/// Routing: in a voice turn with acting enabled, does the model start a task
+/// exactly when it should?
+async fn run_route(gemini: &Gemini, fx: &Fixture, case: &Case, png: &image::DynamicImage, display: &Display) -> Result<CaseResult> {
+    let prepared = luma_net::vision::prepare(png, display, None, 1280, false)?;
+    let ctx = context_block(&TurnContext {
+        app: Some(fx.app.as_str()).filter(|s| !s.is_empty()),
+        window_title: Some(fx.title.as_str()),
+        pointer: None,
+        pointer_closeup: None,
+        has_closeup: false,
+        display_count: 1,
+        level: Level::Standard,
+        marked_items: "",
+    });
+    let g = Gemini { media_resolution: "MEDIA_RESOLUTION_MEDIUM", ..gemini.clone() };
+    let body = g.build_body(&system_prompt(false, true), &[], &ctx, &[ImagePart { jpeg: &prepared.images[0].jpeg }], &case.q);
+    let t0 = Instant::now();
+    let text = g.complete(&body).await?;
+    let total = t0.elapsed().as_millis() as u64;
+    let mut parser = MarkupParser::new();
+    let segs: Vec<Segment> = parser.push(&text).into_iter().chain(parser.finish()).collect();
+    let started = segs.iter().any(|s| matches!(s, Segment::Tag(t) if t.name == "task" && t.attr("goal").is_some()));
+    let drew = segs.iter().any(|s| matches!(s, Segment::Tag(t) if t.name != "task"));
+    Ok(CaseResult {
+        id: case.id.clone(),
+        kind: case.kind.clone(),
+        pass: Some(started) == case.task && !drew,
+        ttft_ms: total,
+        total_ms: total,
+        speech: text.clone(),
+        raw: text,
+        ..Default::default()
+    })
+}
+
+/// First agent step: right target (or right URL), and approval policy.
+async fn run_agent(gemini: &Gemini, fx: &Fixture, case: &Case, png: &image::DynamicImage, display: &Display) -> Result<CaseResult> {
+    let prepared = luma_net::vision::prepare(png, display, None, 1440, false)?;
+    let goal = case.goal.clone().unwrap_or_else(|| case.q.clone());
+    let ctx = agent_context(&AgentContext {
+        goal: &goal,
+        app: Some(fx.app.as_str()),
+        window_title: Some(fx.title.as_str()),
+        step: 1,
+        max_steps: 25,
+        history: &[],
+        last_changed: None,
+        platform: "macOS",
+    });
+    let body = gemini.build_body(AGENT_PROMPT, &[], &ctx, &[ImagePart { jpeg: &prepared.images[0].jpeg }], "Decide the next action.");
+    let t0 = Instant::now();
+    let text = gemini.complete(&body).await?;
+    let total = t0.elapsed().as_millis() as u64;
+    let mut parser = MarkupParser::with_tags(AGENT_TAGS);
+    let tag = parser.push(&text).into_iter().chain(parser.finish()).find_map(|s| match s {
+        Segment::Tag(t) => Some(t),
+        _ => None,
+    });
+    let mut r = CaseResult { id: case.id.clone(), kind: case.kind.clone(), ttft_ms: total, total_ms: total, raw: text.clone(), speech: text, ..Default::default() };
+    let Some(tag) = tag else { return Ok(r) };
+    let Ok(pa) = parse_action(&tag, &prepared.images[0].sent, display) else { return Ok(r) };
+    let expect = case.expect.first().map(String::as_str).unwrap_or("");
+    let right_target = match &pa.action {
+        Action::Click { at, .. } => {
+            r.marks = 1;
+            r.best_iou = fx.targets.get(expect).map(|t| at.rect.iou(&t.rect()));
+            score::target_hit(fx, expect, &at.rect)
+        }
+        Action::Open { url } => case.url.as_ref().is_some_and(|u| url.contains(u.as_str())),
+        _ => false,
+    };
+    r.first_hit = Some(right_target);
+    let label = match &pa.action {
+        Action::Click { label, .. } => label.clone(),
+        _ => String::new(),
+    };
+    let needs_ok = assess(&pa.action, pa.model_risk_high, &label) != Risk::Safe;
+    let approval_ok = match case.approval {
+        Some(true) => needs_ok,
+        Some(false) => !needs_ok,
+        None => true,
+    };
+    r.pass = right_target && approval_ok;
+    Ok(r)
+}
+
 async fn run_case(
     gemini: &Gemini,
     fx: &Fixture,
@@ -157,7 +248,7 @@ async fn run_case(
         marked_items: "",
     });
     let images: Vec<ImagePart> = prepared.images.iter().map(|i| ImagePart { jpeg: &i.jpeg }).collect();
-    let body = gemini.build_body(SYSTEM_PROMPT, &[], &ctx, &images, &case.q);
+    let body = gemini.build_body(&system_prompt(true, false), &[], &ctx, &images, &case.q);
 
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let t0 = Instant::now();

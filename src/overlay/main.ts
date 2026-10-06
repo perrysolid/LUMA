@@ -50,3 +50,10 @@ listen<{ display: number; x: number; y: number } | null>("luma://cursor", (e) =>
   const c = e.payload;
   buddy.setCursor(c && c.display === DISPLAY ? { x: c.x, y: c.y } : null);
 });
+// Voice-only vs annotate turn (long press).
+listen<"annotate" | "voice">("luma://mode", (e) => {
+  buddy.setMode(e.payload);
+  if (e.payload === "annotate" && hudHere && document.getElementById("hud")!.dataset.phase === "listening") {
+    hud.setPhase("listening", "Annotate mode: I'll draw on screen");
+  }
+});

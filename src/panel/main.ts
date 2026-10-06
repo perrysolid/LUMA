@@ -15,6 +15,10 @@ interface Prefs {
   send_closeup: boolean;
   excluded_apps: string[];
   paused: boolean;
+  annotate: string;
+  long_press_ms: number;
+  can_act: boolean;
+  max_task_steps: number;
 }
 interface SettingsView {
   prefs: Prefs;
@@ -83,7 +87,7 @@ function render() {
   const missing = PROVIDERS.filter((x) => x.required && !view.keys[x.id]);
   $("hint").innerHTML = missing.length
     ? `To start, add your ${missing.map((m) => m.name).join(" and ")} key in <b>Settings</b>.`
-    : `Hold ${prettyHotkey(p.hotkey, view.platform)}, point at something and ask <i>“What is this?”</i> Release to get the answer. Press again to interrupt.`;
+    : `Hold ${prettyHotkey(p.hotkey, view.platform)} and ask, then release. <b>Quick press</b>: spoken answer. <b>Hold ${(p.long_press_ms / 1000).toFixed(1)} s+</b>: LUMA also draws on your screen.${p.can_act ? " Ask it to <i>do</i> something (“change my GitHub username”) and it will, asking before anything important." : ""} Press again to stop.`;
 
   const keys = $("keys");
   keys.innerHTML = "";
@@ -118,6 +122,9 @@ function render() {
   $<HTMLInputElement>("stt_model").value = p.stt_model;
   $<HTMLInputElement>("hotkey").value = p.hotkey;
   $<HTMLInputElement>("send_closeup").checked = p.send_closeup;
+  $<HTMLSelectElement>("annotate").value = p.annotate;
+  $<HTMLInputElement>("long_press_s").value = (p.long_press_ms / 1000).toFixed(1);
+  $<HTMLInputElement>("can_act").checked = p.can_act;
   $<HTMLInputElement>("paused").checked = p.paused;
   $<HTMLTextAreaElement>("excluded_apps").value = p.excluded_apps.join("\n");
 
@@ -138,6 +145,9 @@ function collect(): Prefs {
     stt_model: $<HTMLInputElement>("stt_model").value.trim(),
     hotkey: $<HTMLInputElement>("hotkey").value.trim(),
     send_closeup: $<HTMLInputElement>("send_closeup").checked,
+    annotate: $<HTMLSelectElement>("annotate").value,
+    long_press_ms: Math.round(Math.min(5, Math.max(0.8, Number($<HTMLInputElement>("long_press_s").value) || 1.8)) * 1000),
+    can_act: $<HTMLInputElement>("can_act").checked,
     excluded_apps: $<HTMLTextAreaElement>("excluded_apps")
       .value.split("\n")
       .map((s) => s.trim())
@@ -207,6 +217,8 @@ const STATUS: Record<string, string> = {
   listening: "Listening…",
   thinking: "Thinking…",
   speaking: "Talking",
+  acting: "Working on a task",
+  waiting: "Waiting for your answer",
   paused: "Paused",
   error: "Problem",
 };
@@ -217,5 +229,8 @@ listen<{ phase: string; message?: string | null }>("luma://status", (e) => {
 listen<string>("luma://question", (e) => addMsg("you", e.payload));
 listen<string>("luma://answer", (e) => e.payload && addMsg("luma", e.payload));
 listen<string>("luma://notice", (e) => addMsg("sys", e.payload));
+listen<{ step: number; say: string; action: string }>("luma://step", (e) =>
+  addMsg("sys", `Step ${e.payload.step}: ${e.payload.action}${e.payload.say ? ` (“${e.payload.say}”)` : ""}`),
+);
 
 load();

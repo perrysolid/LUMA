@@ -14,9 +14,10 @@
 
 use std::collections::BTreeMap;
 
+/// Visual tags plus `task` (hand-off to the agent).
 pub const KNOWN_TAGS: &[&str] = &[
     "box", "circle", "highlight", "underline", "point", "arrow", "step", "spotlight", "zoom",
-    "focus", "clear", "label",
+    "focus", "clear", "label", "task",
 ];
 
 /// Longest tag we will buffer before deciding it is not a tag.
@@ -40,14 +41,25 @@ pub enum Segment {
     Tag(Tag),
 }
 
-#[derive(Default)]
 pub struct MarkupParser {
     buf: String,
+    tags: &'static [&'static str],
+}
+
+impl Default for MarkupParser {
+    fn default() -> Self {
+        Self { buf: String::new(), tags: KNOWN_TAGS }
+    }
 }
 
 impl MarkupParser {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A parser that recognises a different tag vocabulary (e.g. agent actions).
+    pub fn with_tags(tags: &'static [&'static str]) -> Self {
+        Self { buf: String::new(), tags }
     }
 
     /// Feed a chunk; returns every segment that is now unambiguous.
@@ -64,7 +76,7 @@ impl MarkupParser {
                 emit_text(&mut out, text);
             }
             // buf now starts with '<'
-            match classify(&self.buf) {
+            match classify(&self.buf, self.tags) {
                 Candidate::NeedMore => break,
                 Candidate::NotATag => {
                     let lt: String = self.buf.drain(..1).collect();
@@ -90,7 +102,7 @@ impl MarkupParser {
         let rest = std::mem::take(&mut self.buf);
         if let Some(lt) = rest.find('<') {
             // Drop an obviously truncated known tag rather than speaking it.
-            if matches!(tag_name_prefix(&rest[lt..]), Some(n) if KNOWN_TAGS.contains(&n.as_str())) {
+            if matches!(tag_name_prefix(&rest[lt..]), Some(n) if self.tags.contains(&n.to_ascii_lowercase().as_str())) {
                 emit_text(&mut out, rest[..lt].to_string());
                 return out;
             }
@@ -127,7 +139,7 @@ fn tag_name_prefix(s: &str) -> Option<String> {
     (!name.is_empty()).then_some(name)
 }
 
-fn classify(s: &str) -> Candidate {
+fn classify(s: &str, tags: &[&str]) -> Candidate {
     debug_assert!(s.starts_with('<'));
     let rest = &s[1..];
     let name: String = rest
@@ -136,11 +148,11 @@ fn classify(s: &str) -> Candidate {
         .collect();
     if name.len() == rest.len() {
         // haven't seen the end of the name yet
-        let could_be = rest.is_empty() || KNOWN_TAGS.iter().any(|t| t.starts_with(&name.to_ascii_lowercase()));
+        let could_be = rest.is_empty() || tags.iter().any(|t| t.starts_with(&name.to_ascii_lowercase()));
         return if could_be && s.len() < MAX_TAG_LEN { Candidate::NeedMore } else { Candidate::NotATag };
     }
     let lname = name.to_ascii_lowercase();
-    if !KNOWN_TAGS.contains(&lname.as_str()) {
+    if !tags.contains(&lname.as_str()) {
         return Candidate::NotATag;
     }
     let after = rest[name.len()..].chars().next().unwrap();
@@ -246,7 +258,10 @@ fn parse_attrs(s: &str) -> Option<BTreeMap<String, String>> {
     }
 }
 
-const ATTR_KEYS: &[&str] = &["id", "box", "label", "from", "to", "target", "n", "img", "text"];
+const ATTR_KEYS: &[&str] = &[
+    "id", "box", "label", "from", "to", "target", "n", "img", "text", "goal", "keys", "url", "dir", "amount",
+    "risk", "button", "double", "clear", "ms", "question", "summary", "reason",
+];
 
 /// Best-effort recovery for malformed attribute lists such as
 /// `box="[1,2,3,4] label="DB"` (missing quote). Each known key's value runs

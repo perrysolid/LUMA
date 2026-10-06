@@ -118,20 +118,42 @@ pub fn pointer<R: Runtime>(app: &AppHandle<R>, displays: &[Display]) -> Option<P
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct ActiveWindow {
     pub app: String,
     pub title: String,
+    /// Window bounds in OS input space.
+    pub frame: Option<Rect>,
+}
+
+impl ActiveWindow {
+    /// Identity used to scope memory and to notice "the user switched away".
+    pub fn key(&self) -> String {
+        format!("{} — {}", self.app, self.title)
+    }
 }
 
 pub fn active_window() -> Option<ActiveWindow> {
     let w = active_win_pos_rs::get_active_window().ok()?;
-    Some(ActiveWindow { app: w.app_name, title: w.title })
+    let p = w.position;
+    let frame = (p.width > 0.0 && p.height > 0.0).then(|| Rect::new(p.x, p.y, p.width, p.height));
+    Some(ActiveWindow { app: w.app_name, title: w.title, frame })
 }
 
-/// Everything captured at the moment the user invoked LUMA.
+/// The raw capture taken the instant the user invoked LUMA. Encoding for the
+/// model happens later, once we know which mode the turn is in.
+pub struct RawSnapshot {
+    pub displays: Vec<Display>,
+    pub display: Display,
+    pub full: DynamicImage,
+    pub pointer_view: Option<Point>,
+    pub window: ActiveWindow,
+}
+
+/// What a turn sends to the model.
 pub struct Snapshot {
     pub displays: Vec<Display>,
+    pub display: Display,
     pub images: Vec<EncodedImage>,
     pub window: ActiveWindow,
     /// Pointer in image-1 model coordinates `(y, x)`.
@@ -141,7 +163,7 @@ pub struct Snapshot {
 
 impl Snapshot {
     pub fn context_key(&self) -> String {
-        format!("{} — {}", self.window.app, self.window.title)
+        self.window.key()
     }
 }
 
@@ -150,34 +172,48 @@ pub struct CaptureOptions {
     pub closeup: bool,
 }
 
-/// Capture the display under the pointer plus an optional close-up.
-pub fn snapshot(displays: Vec<Display>, pointer: Option<Point>, opts: &CaptureOptions) -> Result<Snapshot> {
+/// Capture one display's pixels.
+pub fn capture_display(index: usize) -> Result<DynamicImage> {
     if !has_screen_permission() {
         return Err(anyhow!(request_screen_permission()));
     }
-    let display = pointer
-        .and_then(|p| display_at(&displays, p))
-        .or_else(|| displays.iter().find(|d| d.is_primary))
-        .unwrap_or(&displays[0])
-        .clone();
     let monitors = xcap::Monitor::all().map_err(|e| anyhow!("listing displays: {e}"))?;
-    let monitor = monitors.get(display.index).context("display disappeared")?;
+    let monitor = monitors.get(index).context("display disappeared")?;
     let raw = monitor
         .capture_image()
         .map_err(|e| anyhow!("screen capture failed (is Screen Recording permission granted?): {e}"))?;
-    let full = DynamicImage::ImageRgba8(raw);
-    let prepared = luma_net::vision::prepare(
-        &full,
-        &display,
-        pointer.map(|p| display.input_to_view(p)),
-        opts.max_edge,
-        opts.closeup,
-    )?;
-    Ok(Snapshot {
-        displays,
-        images: prepared.images,
+    Ok(DynamicImage::ImageRgba8(raw))
+}
+
+/// Capture the display under the pointer (or `prefer`), unencoded.
+pub fn capture(displays: Vec<Display>, pointer: Option<Point>, prefer: Option<usize>) -> Result<RawSnapshot> {
+    let display = prefer
+        .and_then(|i| displays.iter().find(|d| d.index == i))
+        .or_else(|| pointer.and_then(|p| display_at(&displays, p)))
+        .or_else(|| displays.iter().find(|d| d.is_primary))
+        .unwrap_or(&displays[0])
+        .clone();
+    let full = capture_display(display.index)?;
+    Ok(RawSnapshot {
+        pointer_view: pointer.map(|p| display.input_to_view(p)).filter(|p| display.view_bounds().contains(*p)),
         window: active_window().unwrap_or_default(),
-        pointer_norm: prepared.pointer_norm,
-        pointer_norm_closeup: prepared.pointer_norm_closeup,
+        displays,
+        display,
+        full,
     })
+}
+
+impl RawSnapshot {
+    pub fn encode(&self, opts: &CaptureOptions) -> Result<Snapshot> {
+        let prepared =
+            luma_net::vision::prepare(&self.full, &self.display, self.pointer_view, opts.max_edge, opts.closeup)?;
+        Ok(Snapshot {
+            displays: self.displays.clone(),
+            display: self.display.clone(),
+            images: prepared.images,
+            window: self.window.clone(),
+            pointer_norm: prepared.pointer_norm,
+            pointer_norm_closeup: prepared.pointer_norm_closeup,
+        })
+    }
 }

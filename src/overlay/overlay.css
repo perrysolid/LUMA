@@ -297,3 +297,36 @@ body {
     opacity: 0.5;
   }
 }
+
+#pointer.annotate::before {
+  content: "";
+  position: absolute;
+  left: -9px;
+  top: -9px;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 2.5px solid var(--accent);
+  box-shadow: 0 0 12px rgba(124, 92, 255, 0.7);
+  animation: buddy-ring 1.2s ease-in-out infinite;
+}
+@keyframes buddy-ring {
+  50% {
+    transform: scale(1.12);
+    opacity: 0.6;
+  }
+}
+#pointer[data-state="acting"] path {
+  fill: #2fbf71;
+}
+#pointer[data-state="waiting"] path {
+  fill: #ffb020;
+}
+[data-phase="acting"] .hud-dot {
+  background: #2fbf71;
+  animation: pulse 0.9s ease-in-out infinite;
+}
+[data-phase="waiting"] .hud-dot {
+  background: #ffb020;
+  animation: pulse 1.4s ease-in-out infinite;
+}

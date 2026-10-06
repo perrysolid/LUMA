@@ -128,6 +128,14 @@ pub struct Prefs {
     pub excluded_apps: Vec<String>,
     /// When paused, the hotkey does nothing and nothing is captured.
     pub paused: bool,
+    /// When to draw on screen: "long_press" (hold the shortcut ≥ long_press_ms),
+    /// "always", or "never". Voice-only turns use a smaller image (fewer tokens).
+    pub annotate: String,
+    pub long_press_ms: u64,
+    /// Let LUMA click and type to carry out tasks you ask for.
+    pub can_act: bool,
+    /// Upper bound on agent steps per task.
+    pub max_task_steps: usize,
 }
 
 impl Default for Prefs {
@@ -154,6 +162,10 @@ impl Default for Prefs {
             .map(String::from)
             .to_vec(),
             paused: false,
+            annotate: "long_press".into(),
+            long_press_ms: 1800,
+            can_act: true,
+            max_task_steps: 25,
         }
     }
 }
