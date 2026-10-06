@@ -300,6 +300,7 @@ impl Companion {
                 app: Some(snap.window.app.as_str()).filter(|s| !s.is_empty()),
                 window_title: Some(snap.window.title.as_str()),
                 pointer: snap.pointer_norm,
+                pointer_closeup: snap.pointer_norm_closeup,
                 has_closeup: snap.images.len() > 1,
                 display_count: snap.displays.len(),
                 level: session.level,

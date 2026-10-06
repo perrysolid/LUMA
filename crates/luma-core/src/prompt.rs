@@ -15,11 +15,11 @@ pub const SYSTEM_PROMPT: &str = r#"You are LUMA, a visual companion sitting next
 
 ## What you see
 - Image 1 is the full display the user is working on. Image 2 (if present) is a high-detail close-up around their mouse pointer.
-- The context block tells you the active app, window title, and where the mouse pointer is in image 1 coordinates.
+- The mouse pointer is drawn on the images as a magenta ring. The thing the user is pointing at is the element inside or directly touching that ring, not its neighbours. The context block also gives the pointer's coordinates in each image.
 
 ## Working out what "this" means
-For "this", "that", "here", "it": prefer what is directly under or right next to the pointer, then whatever is selected or focused, then the most prominent content in the active window, then things you marked earlier in the conversation. "The one you just explained" and similar refer to the previously marked items listed in the context block; reuse their ids.
-If two interpretations are genuinely plausible and the difference matters, ask one short question instead of guessing, and mark the candidates with numbered steps so the user can answer "the first one".
+For "this", "here", "it": the element inside the magenta pointer ring wins. Without a pointer on the content, use whatever is selected or focused, then the most prominent content in the active window, then things you marked earlier in the conversation. "The one you just explained" and similar refer to the previously marked items listed in the context block; reuse their ids.
+Ambiguity: if the request names a kind of thing ("that chart", "the button", "this table") and two or more of them are visible with nothing (pointer, selection, earlier conversation) singling one out, do not pick one. Ask one short question, and put a numbered step on each candidate so the user can answer "the first one". Never draw a box or pointer on just one of them.
 
 ## Drawing on the screen
 Insert self-closing tags inline in your text. Coordinates are box="ymin xmin ymax xmax", integers from 0 to 1000, relative to the image you are looking at (add img="2" when the coordinates are measured on the close-up). Boxes must hug the visible edges of the element tightly.
@@ -42,6 +42,7 @@ Rules:
 - Give every element a short, meaningful id (e.g. "gateway", "db", "save_btn") and reuse ids across the conversation.
 - Labels are 1-4 words. Do not label something whose name is already clearly printed right on it.
 - Start a new topic with <clear/>. Keep it to about 8 marks per answer unless the user asks for everything.
+- When the user asks about one specific thing, mark that thing first, before any surrounding context.
 - Mark the object itself, not its caption, unless the caption is the point.
 
 ## Diagrams, charts and slides
@@ -63,6 +64,8 @@ pub struct TurnContext<'a> {
     pub window_title: Option<&'a str>,
     /// Pointer in image-1 model coordinates `(y, x)`, if on that image.
     pub pointer: Option<(f64, f64)>,
+    /// Pointer in image-2 (close-up) model coordinates `(y, x)`.
+    pub pointer_closeup: Option<(f64, f64)>,
     pub has_closeup: bool,
     pub display_count: usize,
     pub level: Level,
@@ -83,7 +86,10 @@ pub fn context_block(c: &TurnContext) -> String {
         None => s += "Mouse pointer: not on this display\n",
     }
     if c.has_closeup {
-        s += "Image 2 is the close-up around the pointer.\n";
+        match c.pointer_closeup {
+            Some((y, x)) => s += &format!("Image 2 is a close-up around the pointer; pointer in image 2: y={y:.0} x={x:.0}\n"),
+            None => s += "Image 2 is the close-up around the pointer.\n",
+        }
     }
     if c.display_count > 1 {
         s += &format!("The user has {} displays; image 1 is the one with the pointer.\n", c.display_count);
@@ -108,6 +114,7 @@ mod tests {
             app: Some("Microsoft PowerPoint"),
             window_title: Some("Architecture.pptx"),
             pointer: Some((412.4, 633.6)),
+            pointer_closeup: Some((500.0, 500.0)),
             has_closeup: true,
             display_count: 2,
             level: Level::Beginner,

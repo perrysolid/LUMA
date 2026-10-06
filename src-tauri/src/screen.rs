@@ -69,6 +69,7 @@ pub struct Snapshot {
     pub window: ActiveWindow,
     /// Pointer in image-1 model coordinates `(y, x)`.
     pub pointer_norm: Option<(f64, f64)>,
+    pub pointer_norm_closeup: Option<(f64, f64)>,
 }
 
 impl Snapshot {
@@ -107,5 +108,6 @@ pub fn snapshot(displays: Vec<Display>, pointer: Option<Point>, opts: &CaptureOp
         images: prepared.images,
         window: active_window().unwrap_or_default(),
         pointer_norm: prepared.pointer_norm,
+        pointer_norm_closeup: prepared.pointer_norm_closeup,
     })
 }

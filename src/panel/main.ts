@@ -46,6 +46,13 @@ const LANGUAGES: [string, string][] = [
   ["od-IN", "Odia"],
 ];
 
+const MODES: Record<string, { model: string; thinking: string }> = {
+  accurate: { model: "gemini-3.8-flash", thinking: "low" },
+  fast: { model: "gemini-3.5-flash", thinking: "minimal" },
+};
+const modeOf = (model: string, thinking: string) =>
+  Object.entries(MODES).find(([, m]) => m.model === model && m.thinking === thinking)?.[0] ?? "custom";
+
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 let view: SettingsView;
 
@@ -107,6 +114,7 @@ function render() {
   $<HTMLInputElement>("tts_pace").value = String(p.tts_pace);
   $<HTMLInputElement>("gemini_model").value = p.gemini_model;
   $<HTMLSelectElement>("thinking_level").value = p.thinking_level;
+  $<HTMLSelectElement>("mode").value = modeOf(p.gemini_model, p.thinking_level);
   $<HTMLInputElement>("stt_model").value = p.stt_model;
   $<HTMLInputElement>("hotkey").value = p.hotkey;
   $<HTMLInputElement>("send_closeup").checked = p.send_closeup;
@@ -160,6 +168,20 @@ document.querySelectorAll<HTMLButtonElement>(".tabs button").forEach((b) =>
     document.querySelectorAll<HTMLElement>("[data-panel]").forEach((s) => (s.hidden = s.dataset.panel !== b.dataset.tab));
   }),
 );
+
+$("mode").addEventListener("change", (e) => {
+  const m = MODES[(e.target as HTMLSelectElement).value];
+  if (!m) return;
+  $<HTMLInputElement>("gemini_model").value = m.model;
+  $<HTMLSelectElement>("thinking_level").value = m.thinking;
+});
+const syncMode = () =>
+  ($<HTMLSelectElement>("mode").value = modeOf(
+    $<HTMLInputElement>("gemini_model").value.trim(),
+    $<HTMLSelectElement>("thinking_level").value,
+  ));
+$("gemini_model").addEventListener("input", syncMode);
+$("thinking_level").addEventListener("change", syncMode);
 
 $("save").addEventListener("click", () => save("saved"));
 $("save2").addEventListener("click", () => save("saved2"));

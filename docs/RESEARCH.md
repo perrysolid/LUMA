@@ -58,3 +58,23 @@ What we looked at and what we took from it. Kept short on purpose.
   PowerPoint/Keynote shape geometry, where it is strictly more reliable than
   vision.
 - A server holding user keys.
+
+## Measured on LUMA's eval (2026-10-06, 18 cases, 1920 px + pointer close-up)
+
+| Config | Pass | Grounding first-hit | Mean IoU | TTFT p50 |
+|---|---|---|---|---|
+| gemini-3.8-flash, thinking low | **100%** | **100%** | 0.81 | 3.4 s |
+| gemini-3.5-flash, minimal | 78% | 80% | 0.79 | 2.2 s |
+| gemini-3.6-flash, minimal* | 67% | 67% | 0.57 | 2.1 s |
+| gemini-3.1-flash-lite, minimal* | 67% | 67% | 0.56 | 1.7 s |
+
+\* measured before the pointer ring was added.
+
+- gemini-3.8-flash rejects `thinkingLevel: minimal` and ignores `thinkingBudget: 0`.
+  It always thinks, so the client falls back from minimal to low.
+- **Drawing the pointer as a ring on the images** (screenshots never include the
+  cursor) was the biggest single gain: "this" questions went from frequent
+  wrong-neighbour picks to 100% on 3.8-flash. Coordinates alone are a weak cue.
+- Shrinking the full image from 1920 to 1440 px did not lower latency, because
+  thinking dominates, so 1920 px stays.
+- Default: Accurate (3.8-flash). Fast mode (3.5-flash) is available in Settings.

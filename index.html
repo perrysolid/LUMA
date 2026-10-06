@@ -47,6 +47,13 @@
         </div>
 
         <h2>Brain</h2>
+        <label class="mode">Answer mode
+          <select id="mode">
+            <option value="accurate">Accurate: Gemini 3.8 Flash (best pointing, ~3.4 s)</option>
+            <option value="fast">Fast: Gemini 3.5 Flash (~2.2 s, less precise)</option>
+            <option value="custom">Custom (set below)</option>
+          </select>
+        </label>
         <div class="grid">
           <label>Gemini model <input id="gemini_model" spellcheck="false" /></label>
           <label>Thinking

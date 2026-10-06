@@ -150,6 +150,7 @@ async fn run_case(
         app: Some(fx.app.as_str()).filter(|s| !s.is_empty()),
         window_title: Some(fx.title.as_str()),
         pointer: prepared.pointer_norm,
+        pointer_closeup: prepared.pointer_norm_closeup,
         has_closeup: prepared.images.len() > 1,
         display_count: 1,
         level,
