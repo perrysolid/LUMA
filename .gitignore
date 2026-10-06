@@ -29,4 +29,5 @@ src-tauri/gen/schemas/
 # never commit secrets
 .env
 .env.*
+!.env.example
 *.pem

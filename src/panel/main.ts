@@ -18,7 +18,7 @@ interface Prefs {
 }
 interface SettingsView {
   prefs: Prefs;
-  keys: Record<Provider, boolean>;
+  keys: Record<Provider, "env" | "keychain" | null>;
   platform: string;
 }
 
@@ -83,9 +83,11 @@ function render() {
   for (const prov of PROVIDERS) {
     const row = document.createElement("div");
     row.className = "keyrow";
-    const ok = view.keys[prov.id];
-    row.innerHTML = `<label>${prov.name} <span class="${ok ? "ok" : "missing"}">${ok ? "✓ saved" : prov.required ? "required" : "optional"}</span>
-        <input type="password" autocomplete="off" spellcheck="false" placeholder="${ok ? "Paste to replace" : prov.help}" /></label>
+    const src = view.keys[prov.id];
+    const ok = src !== null;
+    const status = src === "env" ? "✓ from .env" : src === "keychain" ? "✓ saved" : prov.required ? "required" : "optional";
+    row.innerHTML = `<label>${prov.name} <span class="${ok ? "ok" : "missing"}">${status}</span>
+        <input type="password" autocomplete="off" spellcheck="false" placeholder="${src === "env" ? "Set in .env (takes priority)" : ok ? "Paste to replace" : prov.help}" /></label>
         <button class="ghost">Save</button>`;
     const input = row.querySelector("input")!;
     row.querySelector("button")!.addEventListener("click", async () => {

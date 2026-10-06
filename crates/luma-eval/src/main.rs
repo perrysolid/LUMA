@@ -2,7 +2,7 @@
 //! fixtures with known ground truth and scores grounding quality.
 //!
 //!   node eval/render.mjs
-//!   LUMA_GEMINI_API_KEY=... cargo run -p luma-eval --release -- [--filter editor] [--model id] [--thinking low] [--repeat 3]
+//!   cargo run -p luma-eval --release -- [--filter editor] [--model id] [--thinking low] [--repeat 3]
 //!
 //! Metrics (per case kind):
 //! * locate / refer – first mark's centre inside the target (ScreenSpot-style
@@ -65,10 +65,12 @@ fn repo_root() -> PathBuf {
 #[tokio::main]
 async fn main() -> Result<()> {
     let a = args();
-    let key = std::env::var("LUMA_GEMINI_API_KEY")
-        .ok()
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| anyhow!("set LUMA_GEMINI_API_KEY to run the eval"))?;
+    let _ = dotenvy::from_path(repo_root().join(".env"));
+    let key = ["LUMA_GEMINI_API_KEY", "GEMINI_API_KEY"]
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .find(|k| !k.trim().is_empty())
+        .ok_or_else(|| anyhow!("set LUMA_GEMINI_API_KEY in .env (or the environment) to run the eval"))?;
     let gemini = Gemini { client: reqwest::Client::new(), api_key: key, model: a.model.clone(), thinking_level: a.thinking.clone() };
     let out = repo_root().join("eval/out");
     let mut fixtures: Vec<PathBuf> = std::fs::read_dir(&out)

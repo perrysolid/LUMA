@@ -27,12 +27,12 @@ impl Provider {
         }
     }
 
-    /// Developer override, handy for running the eval harness headless.
-    fn env_var(self) -> &'static str {
+    /// Environment variables (or `.env` entries) checked before the keychain.
+    fn env_vars(self) -> [&'static str; 2] {
         match self {
-            Provider::Gemini => "LUMA_GEMINI_API_KEY",
-            Provider::Assemblyai => "LUMA_ASSEMBLYAI_API_KEY",
-            Provider::Sarvam => "LUMA_SARVAM_API_KEY",
+            Provider::Gemini => ["LUMA_GEMINI_API_KEY", "GEMINI_API_KEY"],
+            Provider::Assemblyai => ["LUMA_ASSEMBLYAI_API_KEY", "ASSEMBLYAI_API_KEY"],
+            Provider::Sarvam => ["LUMA_SARVAM_API_KEY", "SARVAM_API_KEY"],
         }
     }
 
@@ -45,12 +45,51 @@ impl Provider {
     }
 }
 
-pub fn get_key(p: Provider) -> Option<String> {
-    if let Ok(v) = std::env::var(p.env_var()) {
-        if !v.trim().is_empty() {
-            return Some(v.trim().to_string());
-        }
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum KeySource {
+    Env,
+    Keychain,
+}
+
+/// Load `.env` files without overriding variables already set in the real
+/// environment. First file wins for any given key:
+/// 1. `.env` in the working directory
+/// 2. the repository's `.env` (debug builds only, so `npm run tauri dev` works)
+/// 3. `.env` in LUMA's config directory (for installed builds)
+pub fn load_env_files(config_dir: Option<&std::path::Path>) {
+    let _ = dotenvy::dotenv();
+    #[cfg(debug_assertions)]
+    let _ = dotenvy::from_path(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../.env"));
+    if let Some(dir) = config_dir {
+        let _ = dotenvy::from_path(dir.join(".env"));
     }
+}
+
+fn env_key(p: Provider) -> Option<String> {
+    p.env_vars()
+        .iter()
+        .filter_map(|v| std::env::var(v).ok())
+        .map(|v| v.trim().to_string())
+        .find(|v| !v.is_empty())
+}
+
+pub fn key_source(p: Provider) -> Option<KeySource> {
+    if env_key(p).is_some() {
+        Some(KeySource::Env)
+    } else if keychain_key(p).is_some() {
+        Some(KeySource::Keychain)
+    } else {
+        None
+    }
+}
+
+/// `.env` / environment first, then the OS keychain.
+pub fn get_key(p: Provider) -> Option<String> {
+    env_key(p).or_else(|| keychain_key(p))
+}
+
+fn keychain_key(p: Provider) -> Option<String> {
     keyring::Entry::new(SERVICE, p.account())
         .ok()?
         .get_password()

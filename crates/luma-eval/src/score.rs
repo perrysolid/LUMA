@@ -15,7 +15,9 @@ pub struct Target {
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// Human-readable name, kept for result inspection.
     #[serde(default)]
+    #[allow(dead_code)]
     pub label: String,
 }
 

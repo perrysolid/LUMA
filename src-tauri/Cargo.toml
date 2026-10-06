@@ -34,6 +34,7 @@ image = { version = "0.25.10", default-features = false, features = ["png", "jpe
 anyhow = "1.0.104"
 log = "0.4.34"
 env_logger = "0.11.11"
+dotenvy = "0.15.7"
 
 
 [target.'cfg(target_os = "macos")'.dependencies]

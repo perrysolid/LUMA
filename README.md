@@ -19,7 +19,9 @@ and [docs/RESEARCH.md](docs/RESEARCH.md).
 ## Use it
 
 1. Install LUMA (`.dmg` on macOS, `.msi`/`.exe` on Windows) from Releases, or build it yourself (below).
-2. Open LUMA from the menu bar / system tray → **Settings** → add your keys:
+2. Add your keys, either in LUMA → **Settings** (saved to the OS keychain) or in a `.env` file
+   (copy `.env.example`; for the installed app put it in `~/Library/Application Support/com.luma.companion/`
+   on macOS or `%APPDATA%\com.luma.companion\` on Windows). `.env` takes priority.
    - **Gemini** (required): https://aistudio.google.com/apikey. Use a billing-enabled
      project so your screen content is not used for training.
    - **AssemblyAI** (required, speech-to-text)
@@ -35,6 +37,7 @@ Requirements: Node 20+, Rust (stable), and on macOS the Xcode Command Line Tools
 
 ```bash
 npm install
+cp .env.example .env     # then fill in your keys (git-ignored)
 npm run tauri dev        # run the app
 npm test                 # TypeScript + Rust unit tests
 npm run demo             # overlay demo page: http://localhost:1420/dev/demo.html
@@ -44,8 +47,8 @@ npm run demo             # overlay demo page: http://localhost:1420/dev/demo.htm
 
 ```bash
 npm run eval:render                              # render fixtures with headless Chrome
-LUMA_GEMINI_API_KEY=... npm run eval             # score grounding, flows, ambiguity, latency
-LUMA_GEMINI_API_KEY=... npm run eval -- --filter editor --repeat 3
+npm run eval                                     # score grounding, flows, ambiguity, latency
+npm run eval -- --filter editor --repeat 3
 ```
 
 ### Release builds

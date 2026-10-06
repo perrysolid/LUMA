@@ -7,7 +7,7 @@ use companion::{Companion, Phase};
 use luma_core::geometry::Display;
 use luma_core::session::Session;
 use serde::Serialize;
-use settings::{get_key, set_key, Prefs, Provider};
+use settings::{get_key, key_source, set_key, KeySource, Prefs, Provider};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -25,8 +25,8 @@ pub struct AppState {
 #[derive(Serialize)]
 struct SettingsView {
     prefs: Prefs,
-    /// Which keys are configured. The keys themselves never reach the UI.
-    keys: std::collections::BTreeMap<String, bool>,
+    /// Where each configured key comes from. The keys themselves never reach the UI.
+    keys: std::collections::BTreeMap<String, Option<KeySource>>,
     platform: &'static str,
 }
 
@@ -36,7 +36,7 @@ fn get_settings(state: tauri::State<AppState>) -> SettingsView {
         prefs: state.prefs.lock().unwrap().clone(),
         keys: Provider::ALL
             .iter()
-            .map(|p| (format!("{p:?}").to_lowercase(), get_key(*p).is_some()))
+            .map(|p| (format!("{p:?}").to_lowercase(), key_source(*p)))
             .collect(),
         platform: std::env::consts::OS,
     }
@@ -239,7 +239,9 @@ pub fn run() {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
-            let prefs_path = app.path().app_config_dir()?.join("prefs.json");
+            let config_dir = app.path().app_config_dir()?;
+            settings::load_env_files(Some(&config_dir));
+            let prefs_path = config_dir.join("prefs.json");
             let prefs = Prefs::load(&prefs_path);
             let hotkey = prefs.hotkey.clone();
             app.manage(AppState {
