@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LUMA overlay demo</title>
+    <link rel="stylesheet" href="/src/overlay/overlay.css" />
+    <style>
+      /* A fake "slide" under the overlay, like a PowerPoint architecture diagram */
+      html,
+      body {
+        pointer-events: auto;
+      }
+      #slide {
+        position: fixed;
+        inset: 0;
+        background: #fbfbfd;
+        font-family: Georgia, serif;
+        color: #1d2433;
+      }
+      #slide h1 {
+        position: absolute;
+        left: 60px;
+        top: 34px;
+        margin: 0;
+        font: 600 30px/1.2 -apple-system, system-ui, sans-serif;
+      }
+      .node {
+        position: absolute;
+        padding: 18px 0;
+        width: 170px;
+        text-align: center;
+        border: 2px solid #3f5f8f;
+        border-radius: 10px;
+        background: #e9f0fb;
+        font: 600 16px -apple-system, system-ui, sans-serif;
+      }
+      .db {
+        border-radius: 50% / 18%;
+        background: #fdf1df;
+        border-color: #a8742b;
+      }
+      #wires {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #wires path {
+        stroke: #7c8aa5;
+        stroke-width: 2;
+        fill: none;
+        marker-end: url(#tip);
+      }
+      #controls {
+        position: fixed;
+        right: 16px;
+        top: 16px;
+        z-index: 10;
+        display: flex;
+        gap: 8px;
+      }
+      #controls button {
+        font: 600 13px system-ui;
+        padding: 6px 10px;
+        border-radius: 8px;
+        border: 1px solid #ccd;
+        background: #fff;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="slide">
+      <h1>Order platform — architecture</h1>
+      <svg id="wires">
+        <defs>
+          <marker id="tip" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#7c8aa5" />
+          </marker>
+        </defs>
+      </svg>
+      <div class="node" id="client" style="left: 70px; top: 300px">Web client</div>
+      <div class="node" id="gateway" style="left: 330px; top: 300px">API Gateway</div>
+      <div class="node" id="auth" style="left: 600px; top: 160px">Auth service</div>
+      <div class="node" id="orders" style="left: 600px; top: 440px">Orders service</div>
+      <div class="node" id="queue" style="left: 870px; top: 440px">Event queue</div>
+      <div class="node db" id="db" style="left: 600px; top: 640px">Orders DB</div>
+      <div class="node" id="email" style="left: 1110px; top: 440px">Email worker</div>
+    </div>
+
+    <svg id="stage" xmlns="http://www.w3.org/2000/svg">
+      <g id="layer-spot"></g>
+      <g id="layer-shapes"></g>
+      <g id="layer-arrows"></g>
+      <g id="layer-steps"></g>
+    </svg>
+    <div id="labels"></div>
+    <div id="pointer" hidden>
+      <svg viewBox="0 0 32 32" width="30" height="30"><path d="M4 3 L27 14 L16.5 17 L12 28 Z" /></svg>
+      <div class="pointer-label" hidden></div>
+    </div>
+    <div id="hud" hidden>
+      <div class="hud-row">
+        <span class="hud-dot"></span>
+        <span class="hud-meter" hidden><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="hud-text"></span>
+      </div>
+      <div class="hud-sub" hidden></div>
+    </div>
+    <div id="controls">
+      <button id="play">▶ Walkthrough</button>
+      <button id="final">Final frame</button>
+      <button id="clear">Clear</button>
+    </div>
+    <script type="module" src="./demo.ts"></script>
+  </body>
+</html>

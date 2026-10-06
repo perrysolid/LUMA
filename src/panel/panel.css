@@ -1,0 +1,262 @@
+:root {
+  --bg: #f6f5fb;
+  --card: #ffffff;
+  --ink: #17142b;
+  --muted: #6c6887;
+  --line: #e4e1f0;
+  --accent: #6a4dff;
+  --accent-ink: #ffffff;
+  --you: #efeaff;
+  --font: -apple-system, BlinkMacSystemFont, "Segoe UI Variable", "Segoe UI", system-ui, sans-serif;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #121021;
+    --card: #1b1830;
+    --ink: #efedf9;
+    --muted: #9b97b8;
+    --line: #2c2847;
+    --accent: #8a70ff;
+    --you: #2a2450;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px/1.45 var(--font);
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px 10px;
+}
+.brand {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+.logo {
+  width: 34px;
+  height: 34px;
+  border-radius: 11px;
+  background: radial-gradient(circle at 30% 30%, #b9a8ff, var(--accent) 55%, #ff5c8a 120%);
+  box-shadow: 0 4px 14px rgba(106, 77, 255, 0.4);
+}
+h1 {
+  margin: 0;
+  font-size: 17px;
+  letter-spacing: 0.08em;
+}
+.status {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 600;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+}
+.tabs button[aria-selected="true"] {
+  color: var(--ink);
+  border-bottom-color: var(--accent);
+}
+main {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px 18px;
+}
+section[data-panel="talk"] {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+section[hidden] {
+  display: none !important;
+}
+h2 {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  margin: 18px 0 8px;
+}
+h2:first-child {
+  margin-top: 0;
+}
+.muted {
+  color: var(--muted);
+  font-size: 12.5px;
+  margin: 0 0 10px;
+}
+.hint {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+.hint kbd {
+  font: 600 12px var(--font);
+  padding: 2px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+.log {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.msg {
+  padding: 9px 12px;
+  border-radius: 12px;
+  max-width: 92%;
+  white-space: pre-wrap;
+}
+.msg.you {
+  align-self: flex-end;
+  background: var(--you);
+}
+.msg.luma {
+  align-self: flex-start;
+  background: var(--card);
+  border: 1px solid var(--line);
+}
+.msg.sys {
+  align-self: center;
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.ask {
+  display: flex;
+  gap: 8px;
+}
+input,
+select,
+textarea {
+  font: inherit;
+  color: var(--ink);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 8px 10px;
+  width: 100%;
+}
+input[type="range"] {
+  padding: 0;
+}
+textarea {
+  resize: vertical;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  outline-offset: 0;
+}
+button {
+  font: inherit;
+  font-weight: 600;
+  border: 0;
+  border-radius: 9px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+button.ghost {
+  background: transparent;
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+.grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.grid label,
+.keys label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--muted);
+}
+.keys {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.keyrow {
+  display: flex;
+  gap: 8px;
+  align-items: end;
+}
+.keyrow label {
+  flex: 1;
+}
+.ok {
+  color: #18a565;
+  font-weight: 600;
+}
+.missing {
+  color: #d9822b;
+  font-weight: 600;
+}
+.check {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 12px 0;
+}
+.check input {
+  width: auto;
+  margin-top: 3px;
+}
+.row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 10px;
+}
+.saved {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+.facts {
+  padding-left: 18px;
+  margin: 0;
+}
+.facts li {
+  margin-bottom: 6px;
+}
+@media (max-width: 400px) {
+  .grid {
+    grid-template-columns: 1fr;
+  }
+}

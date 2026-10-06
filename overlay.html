@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LUMA overlay</title>
+    <link rel="stylesheet" href="/src/overlay/overlay.css" />
+  </head>
+  <body>
+    <svg id="stage" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur stdDeviation="3" result="b" />
+          <feMerge><feMergeNode in="b" /><feMergeNode in="SourceGraphic" /></feMerge>
+        </filter>
+      </defs>
+      <g id="layer-spot"></g>
+      <g id="layer-shapes"></g>
+      <g id="layer-arrows"></g>
+      <g id="layer-steps"></g>
+    </svg>
+    <div id="labels"></div>
+    <div id="pointer" hidden>
+      <svg viewBox="0 0 32 32" width="30" height="30" aria-hidden="true">
+        <path d="M4 3 L27 14 L16.5 17 L12 28 Z" />
+      </svg>
+      <div class="pointer-label" hidden></div>
+    </div>
+    <div id="hud" hidden>
+      <div class="hud-row">
+        <span class="hud-dot"></span>
+        <span class="hud-meter" hidden><i></i><i></i><i></i><i></i><i></i></span>
+        <span class="hud-text"></span>
+      </div>
+      <div class="hud-sub" hidden></div>
+    </div>
+    <script type="module" src="/src/overlay/main.ts"></script>
+  </body>
+</html>

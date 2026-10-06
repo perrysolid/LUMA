@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LUMA</title>
+    <link rel="stylesheet" href="/src/panel/panel.css" />
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <h1>LUMA</h1>
+          <p class="status" id="status">Starting…</p>
+        </div>
+      </div>
+      <button class="ghost" id="stop" title="Stop talking and clear the screen">Stop</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="talk">Talk</button>
+      <button role="tab" aria-selected="false" data-tab="settings">Settings</button>
+      <button role="tab" aria-selected="false" data-tab="privacy">Privacy</button>
+    </nav>
+
+    <main>
+      <section data-panel="talk">
+        <div class="hint" id="hint"></div>
+        <div class="log" id="log" aria-live="polite"></div>
+        <form class="ask" id="ask">
+          <input id="question" autocomplete="off" placeholder="Or type a question about your screen…" />
+          <button type="submit">Ask</button>
+        </form>
+      </section>
+
+      <section data-panel="settings" hidden>
+        <h2>API keys</h2>
+        <p class="muted">Stored in your system keychain. They are never shown again or sent anywhere except the provider.</p>
+        <div class="keys" id="keys"></div>
+
+        <h2>Voice</h2>
+        <div class="grid">
+          <label>Voice <select id="tts_speaker"></select></label>
+          <label>Language <select id="tts_language"></select></label>
+          <label>Speed <input id="tts_pace" type="range" min="0.7" max="1.6" step="0.05" /></label>
+        </div>
+
+        <h2>Brain</h2>
+        <div class="grid">
+          <label>Gemini model <input id="gemini_model" spellcheck="false" /></label>
+          <label>Thinking
+            <select id="thinking_level">
+              <option value="minimal">Minimal (fastest)</option>
+              <option value="low">Low (recommended)</option>
+              <option value="medium">Medium</option>
+              <option value="high">High (slowest, deepest)</option>
+            </select>
+          </label>
+          <label>Speech-to-text model <input id="stt_model" spellcheck="false" /></label>
+          <label>Shortcut (hold to talk) <input id="hotkey" spellcheck="false" /></label>
+        </div>
+        <label class="check"><input type="checkbox" id="send_closeup" /> Send a close-up of the area around the pointer (sharper answers about small things)</label>
+        <div class="row"><button id="save">Save settings</button><span class="saved" id="saved"></span></div>
+
+        <h2>Permissions</h2>
+        <div class="muted" id="perm"></div>
+      </section>
+
+      <section data-panel="privacy" hidden>
+        <h2>What LUMA sees</h2>
+        <ul class="facts">
+          <li>Only while you hold the shortcut (or ask a typed question) does LUMA capture the screen your pointer is on and listen to the microphone.</li>
+          <li>The status pill on screen always shows when it is listening, looking, thinking or talking.</li>
+          <li>Screenshots and audio are sent to the AI providers for that one answer and are never saved by LUMA. Only the text of the conversation is kept in memory, until you quit or clear it.</li>
+        </ul>
+        <label class="check"><input type="checkbox" id="paused" /> Pause LUMA (no seeing, no listening)</label>
+        <h2>Never look at these apps</h2>
+        <p class="muted">One per line. If one of these is in front, LUMA refuses to capture.</p>
+        <textarea id="excluded_apps" rows="7" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="save2">Save</button>
+          <button class="ghost" id="clear">Forget this conversation</button>
+          <span class="saved" id="saved2"></span>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/panel/main.ts"></script>
+  </body>
+</html>
