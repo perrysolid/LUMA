@@ -1,6 +1,7 @@
 // Dev-only: replays a scripted "explain this architecture" walkthrough through
 // the real overlay Scene, so annotation visuals can be checked in a browser
 // without the desktop app or any API keys.
+import { Buddy } from "../src/overlay/buddy";
 import { Hud } from "../src/overlay/hud";
 import { Scene, type Annotation } from "../src/overlay/scene";
 import type { Rect } from "../src/overlay/geometry";
@@ -44,7 +45,7 @@ const scene = new Scene(
     steps: document.getElementById("layer-steps") as unknown as SVGGElement,
   },
   document.getElementById("labels")!,
-  document.getElementById("pointer")!,
+  new Buddy(document.getElementById("pointer")!),
 );
 const hud = new Hud(document.getElementById("hud")!);
 

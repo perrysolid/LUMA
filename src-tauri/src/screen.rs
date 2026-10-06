@@ -9,6 +9,73 @@ use luma_core::geometry::{display_at, Display, Point, Rect};
 pub use luma_net::vision::EncodedImage;
 use tauri::{AppHandle, Runtime};
 
+#[cfg(target_os = "macos")]
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGPreflightScreenCaptureAccess() -> bool;
+    fn CGRequestScreenCaptureAccess() -> bool;
+}
+
+/// Without Screen Recording permission macOS does not fail a capture: it
+/// silently returns only the wallpaper and menu bar. So check explicitly.
+#[derive(Debug)]
+pub struct NoScreenPermission {
+    pub host: String,
+}
+
+impl std::fmt::Display for NoScreenPermission {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "I can't see your screen yet. In System Settings → Privacy & Security → Screen & System Audio Recording, turn on {}, then quit and reopen it.",
+            self.host
+        )
+    }
+}
+impl std::error::Error for NoScreenPermission {}
+
+/// The app macOS attributes the permission to: LUMA itself when bundled,
+/// the terminal or editor when running `npm run tauri dev`.
+fn permission_host() -> String {
+    let bundled = std::env::current_exe()
+        .ok()
+        .is_some_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
+    if bundled {
+        return "LUMA".into();
+    }
+    match std::env::var("TERM_PROGRAM").unwrap_or_default().as_str() {
+        "Apple_Terminal" => "Terminal".into(),
+        "iTerm.app" => "iTerm".into(),
+        "vscode" => "Visual Studio Code (or Cursor)".into(),
+        "WarpTerminal" => "Warp".into(),
+        "ghostty" => "Ghostty".into(),
+        "" => "the app you started LUMA from".into(),
+        other => other.to_string(),
+    }
+}
+
+pub fn has_screen_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        CGPreflightScreenCaptureAccess()
+    }
+    #[cfg(not(target_os = "macos"))]
+    true
+}
+
+/// Ask once (shows the system prompt the first time) and open the settings
+/// pane so the user can flip the switch.
+pub fn request_screen_permission() -> NoScreenPermission {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        let _ = CGRequestScreenCaptureAccess();
+        let _ = std::process::Command::new("open")
+            .arg("x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")
+            .spawn();
+    }
+    NoScreenPermission { host: permission_host() }
+}
+
 /// Enumerate displays in OS input space.
 pub fn displays() -> Result<Vec<Display>> {
     let monitors = xcap::Monitor::all().map_err(|e| anyhow!("listing displays: {e}"))?;
@@ -85,6 +152,9 @@ pub struct CaptureOptions {
 
 /// Capture the display under the pointer plus an optional close-up.
 pub fn snapshot(displays: Vec<Display>, pointer: Option<Point>, opts: &CaptureOptions) -> Result<Snapshot> {
+    if !has_screen_permission() {
+        return Err(anyhow!(request_screen_permission()));
+    }
     let display = pointer
         .and_then(|p| display_at(&displays, p))
         .or_else(|| displays.iter().find(|d| d.is_primary))

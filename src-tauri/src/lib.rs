@@ -110,6 +110,55 @@ fn register_hotkey(app: &AppHandle, accel: &str) -> Result<(), String> {
     app.global_shortcut().register(accel).map_err(|e| e.to_string())
 }
 
+#[derive(Clone, Serialize, PartialEq)]
+struct CursorEvent {
+    display: usize,
+    x: f64,
+    y: f64,
+}
+
+/// Streams the mouse position (display-local view points) to the overlays so
+/// the companion cursor can follow it. Polls at ~60 Hz but only emits when
+/// the pointer actually moves; idle cost is negligible.
+fn spawn_cursor_tracker(app: AppHandle) {
+    std::thread::Builder::new()
+        .name("luma-cursor".into())
+        .spawn(move || {
+            let mut displays = screen::displays().unwrap_or_default();
+            let mut refreshed = std::time::Instant::now();
+            let mut last: Option<CursorEvent> = None;
+            let mut hidden = false;
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+                let paused = app.state::<AppState>().prefs.lock().unwrap().paused;
+                if paused {
+                    if !hidden {
+                        let _ = app.emit("luma://cursor", Option::<CursorEvent>::None);
+                        hidden = true;
+                        last = None;
+                    }
+                    continue;
+                }
+                hidden = false;
+                if refreshed.elapsed().as_secs() >= 3 || displays.is_empty() {
+                    if let Ok(d) = screen::displays() {
+                        displays = d;
+                    }
+                    refreshed = std::time::Instant::now();
+                }
+                let Some(p) = screen::pointer(&app, &displays) else { continue };
+                let Some(d) = luma_core::geometry::display_at(&displays, p) else { continue };
+                let v = d.input_to_view(p);
+                let ev = CursorEvent { display: d.index, x: v.x.round(), y: v.y.round() };
+                if last.as_ref() != Some(&ev) {
+                    let _ = app.emit("luma://cursor", Some(&ev));
+                    last = Some(ev);
+                }
+            }
+        })
+        .expect("cursor thread");
+}
+
 /// One transparent, click-through overlay window per display. Called at
 /// startup and at every turn, so plugging in or rearranging monitors is
 /// picked up without a restart.
@@ -288,6 +337,10 @@ pub fn run() {
             match screen::displays() {
                 Ok(d) => sync_overlays(&handle, &d),
                 Err(e) => log::error!("{e}"),
+            }
+            spawn_cursor_tracker(handle.clone());
+            if !screen::has_screen_permission() {
+                log::warn!("Screen Recording permission missing; LUMA will ask on first use");
             }
             if Provider::ALL.iter().take(2).any(|p| get_key(*p).is_none()) {
                 show_panel(&handle);

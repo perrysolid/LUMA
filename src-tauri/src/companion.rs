@@ -147,6 +147,12 @@ impl Companion {
             return;
         }
 
+        if !screen::has_screen_permission() {
+            let e = screen::request_screen_permission();
+            self.status(app, Phase::Error, Some(e.to_string()));
+            crate::show_panel(app);
+            return;
+        }
         let snapshot = self.spawn_snapshot(app, &prefs);
         let (audio_tx, audio_rx) = mpsc::channel::<Vec<u8>>(256);
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<SttEvent>();
@@ -232,6 +238,11 @@ impl Companion {
         let epoch = self.interrupt(app);
         if get_key(Provider::Gemini).is_none() {
             self.status(app, Phase::Error, Some("Add your Gemini API key in LUMA settings.".into()));
+            return;
+        }
+        if !screen::has_screen_permission() {
+            let e = screen::request_screen_permission();
+            self.status(app, Phase::Error, Some(e.to_string()));
             return;
         }
         let snapshot = self.spawn_snapshot(app, &prefs);

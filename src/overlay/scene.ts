@@ -24,6 +24,12 @@ export type Annotation =
   | { op: "label"; display: number; id: string; rect: Rect; text: string }
   | { op: "clear"; id?: string | null };
 
+/** The companion pointer (see buddy.ts). */
+export interface PointerLike {
+  flyTo(target: Pt, label?: string): void;
+  release(): void;
+}
+
 const NS = "http://www.w3.org/2000/svg";
 const reduceMotion = () => window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
 
@@ -75,13 +81,11 @@ function ellipsePath(r: Rect): string {
 export class Scene {
   private items = new Map<string, Item>();
   private spot: SVGPathElement | null = null;
-  private pointerPos: Pt | null = null;
-  private pointerAnim = 0;
 
   constructor(
     private layers: { spot: SVGGElement; shapes: SVGGElement; arrows: SVGGElement; steps: SVGGElement },
     private labels: HTMLElement,
-    private pointer: HTMLElement,
+    private pointer: PointerLike,
     private viewport: () => Rect = () => ({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }),
   ) {}
 
@@ -118,8 +122,7 @@ export class Scene {
     if (this.spot) nodes.push(this.spot);
     this.items.clear();
     this.spot = null;
-    this.pointer.hidden = true;
-    this.pointerPos = null;
+    this.pointer.release();
     for (const n of nodes) this.fadeRemove(n);
   }
 
@@ -317,36 +320,7 @@ export class Scene {
   }
 
   private point(id: string, rect: Rect, text?: string) {
-    const target = center(rect);
-    const el = this.pointer;
-    const lbl = el.querySelector<HTMLElement>(".pointer-label")!;
-    lbl.hidden = !text;
-    lbl.textContent = text ?? "";
-    const vp = this.viewport();
-    const from = this.pointerPos ?? { x: vp.w / 2, y: vp.h - 120 };
-    el.hidden = false;
-    // keep the bubble on screen
-    lbl.style.left = target.x > vp.w - 260 ? "auto" : "30px";
-    lbl.style.right = target.x > vp.w - 260 ? "30px" : "auto";
-    const place = (p: Pt) => (el.style.transform = `translate(${p.x - 4}px, ${p.y - 3}px)`);
-    cancelAnimationFrame(this.pointerAnim);
-    if (reduceMotion()) {
-      place(target);
-    } else {
-      // fly along a gentle arc
-      const mid = { x: (from.x + target.x) / 2, y: Math.min(from.y, target.y) - Math.hypot(target.x - from.x, target.y - from.y) * 0.25 };
-      const t0 = performance.now();
-      const dur = Math.min(900, 380 + Math.hypot(target.x - from.x, target.y - from.y) * 0.35);
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - t0) / dur);
-        const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
-        const u = 1 - e;
-        place({ x: u * u * from.x + 2 * u * e * mid.x + e * e * target.x, y: u * u * from.y + 2 * u * e * mid.y + e * e * target.y });
-        if (t < 1) this.pointerAnim = requestAnimationFrame(tick);
-      };
-      this.pointerAnim = requestAnimationFrame(tick);
-    }
-    this.pointerPos = target;
+    this.pointer.flyTo(center(rect), text);
     // the pointer is a singleton; remember the target for references only
     this.items.delete(id);
     this.items.set(id, { id, rect, nodes: [] });
