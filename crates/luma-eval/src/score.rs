@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct Viewport {
     pub w: f64,
     pub h: f64,
@@ -46,6 +47,7 @@ pub struct Case {
 pub struct Fixture {
     pub name: String,
     pub dpr: f64,
+    #[allow(dead_code)]
     pub viewport: Viewport,
     #[serde(default)]
     pub app: String,

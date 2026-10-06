@@ -74,6 +74,10 @@ impl MarkupParser {
                     self.buf.drain(..len);
                     out.push(Segment::Tag(tag));
                 }
+                Candidate::Drop(len) => {
+                    // Unrecoverable markup: never speak it.
+                    self.buf.drain(..len);
+                }
             }
         }
         out
@@ -111,6 +115,8 @@ enum Candidate {
     NeedMore,
     NotATag,
     Tag(Tag, usize),
+    /// Clearly a known tag, but its attributes are beyond repair.
+    Drop(usize),
 }
 
 fn tag_name_prefix(s: &str) -> Option<String> {
@@ -141,22 +147,34 @@ fn classify(s: &str) -> Candidate {
     if !(after.is_whitespace() || after == '/' || after == '>') {
         return Candidate::NotATag;
     }
-    // find the closing '>' outside quotes
+    // Find the end: '>' outside quotes, or "/>" anywhere (models sometimes
+    // drop a quote, and no label legitimately contains "/>").
     let mut quote: Option<char> = None;
+    let mut prev = '\0';
     for (i, c) in s.char_indices().skip(1 + name.len()) {
-        match (quote, c) {
-            (Some(q), c) if c == q => quote = None,
-            (Some(_), _) => {}
-            (None, '"') | (None, '\'') => quote = Some(c),
-            (None, '<') => return Candidate::NotATag,
-            (None, '>') => {
-                let inner = s[1 + name.len()..i].trim_end_matches('/');
-                return match parse_attrs(inner) {
-                    Some(attrs) => Candidate::Tag(Tag { name: lname, attrs }, i + 1),
-                    None => Candidate::NotATag,
-                };
+        let self_close = c == '>' && prev == '/';
+        prev = c;
+        let end = match (quote, c) {
+            _ if self_close => true,
+            (Some(q), c) if c == q => {
+                quote = None;
+                false
             }
-            _ => {}
+            (Some(_), _) => false,
+            (None, '"') | (None, '\'') => {
+                quote = Some(c);
+                false
+            }
+            (None, '<') => return Candidate::NotATag,
+            (None, '>') => true,
+            _ => false,
+        };
+        if end {
+            let inner = s[1 + name.len()..i].trim_end_matches('/');
+            return match parse_attrs(inner).or_else(|| parse_attrs_lenient(inner)) {
+                Some(attrs) => Candidate::Tag(Tag { name: lname, attrs }, i + 1),
+                None => Candidate::Drop(i + 1),
+            };
         }
         if i > MAX_TAG_LEN {
             return Candidate::NotATag;
@@ -226,6 +244,50 @@ fn parse_attrs(s: &str) -> Option<BTreeMap<String, String>> {
         }
         attrs.insert(key.to_ascii_lowercase(), unescape(&val));
     }
+}
+
+const ATTR_KEYS: &[&str] = &["id", "box", "label", "from", "to", "target", "n", "img", "text"];
+
+/// Best-effort recovery for malformed attribute lists such as
+/// `box="[1,2,3,4] label="DB"` (missing quote). Each known key's value runs
+/// until its closing quote or the next ` key=`, whichever comes first.
+fn parse_attrs_lenient(s: &str) -> Option<BTreeMap<String, String>> {
+    let lower = s.to_ascii_lowercase();
+    let mut starts: Vec<(usize, usize, &str)> = Vec::new(); // (key_start, value_start, key)
+    for key in ATTR_KEYS {
+        let pat = format!("{key}=");
+        let mut from = 0;
+        while let Some(p) = lower[from..].find(&pat) {
+            let at = from + p;
+            let boundary = at == 0 || !lower.as_bytes()[at - 1].is_ascii_alphanumeric() && lower.as_bytes()[at - 1] != b'_';
+            if boundary {
+                starts.push((at, at + pat.len(), key));
+                break;
+            }
+            from = at + pat.len();
+        }
+    }
+    if starts.is_empty() {
+        return None;
+    }
+    starts.sort();
+    let mut attrs = BTreeMap::new();
+    for (k, &(_, vstart, key)) in starts.iter().enumerate() {
+        let vend = starts.get(k + 1).map(|n| n.0).unwrap_or(s.len());
+        let mut v = s[vstart..vend].trim();
+        let quote = v.chars().next().filter(|c| *c == '"' || *c == '\'');
+        if let Some(q) = quote {
+            v = &v[1..];
+            if let Some(close) = v.find(q) {
+                v = &v[..close];
+            }
+        }
+        let v = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+        if !v.is_empty() {
+            attrs.insert(key.to_string(), unescape(v));
+        }
+    }
+    (!attrs.is_empty()).then_some(attrs)
 }
 
 fn unescape(s: &str) -> String {
@@ -321,6 +383,25 @@ mod tests {
         assert!(matches!(&out[0], Segment::Tag(t) if t.name == "clear"));
         assert_eq!(out[1], text("ok "));
         assert!(matches!(&out[2], Segment::Tag(t) if t.attr("text") == Some("A & B")));
+    }
+
+    #[test]
+    fn malformed_quotes_are_repaired_not_spoken() {
+        let out = run(&[r#"That is the <box id="auth" box="[177,417,243,538] label="Auth service"/> Auth service."#]);
+        assert_eq!(out.len(), 3, "{out:?}");
+        let Segment::Tag(t) = &out[1] else { panic!("{out:?}") };
+        assert_eq!(t.attr("box"), Some("[177,417,243,538]"));
+        assert_eq!(t.attr("label"), Some("Auth service"));
+        assert_eq!(out[2], text(" Auth service."));
+    }
+
+    #[test]
+    fn unrepairable_known_tag_is_dropped() {
+        let out = run(&[r#"Look <box ===/> here."#]);
+        assert_eq!(out, vec![text("Look "), text(" here.")].into_iter().fold(Vec::new(), |mut v, s| {
+            merge(&mut v, s);
+            v
+        }));
     }
 
     #[test]

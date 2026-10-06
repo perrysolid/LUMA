@@ -87,7 +87,9 @@ async fn main() -> Result<()> {
         let display = Display {
             index: 0,
             name: "eval".into(),
-            input_frame: Rect::new(0.0, 0.0, fx.viewport.w, fx.viewport.h),
+            // The screenshot defines the screen; headless Chrome's reported
+            // innerHeight can differ from the captured area.
+            input_frame: Rect::new(0.0, 0.0, png.width() as f64 / fx.dpr, png.height() as f64 / fx.dpr),
             input_per_point: 1.0,
             scale_factor: fx.dpr,
             is_primary: true,
