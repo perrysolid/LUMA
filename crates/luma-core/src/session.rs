@@ -108,6 +108,13 @@ impl Session {
         Some(lvl)
     }
 
+    /// Replace a remembered item's geometry (after a late refine pass).
+    pub fn update_item(&mut self, id: &str, at: crate::geometry::DisplayRect) {
+        if let Some((m, _)) = self.items.get_mut(id) {
+            m.at = at;
+        }
+    }
+
     /// Privacy: forget everything.
     pub fn clear(&mut self) {
         *self = Self { level: self.level, max_turns: self.max_turns, ..Self::default() };

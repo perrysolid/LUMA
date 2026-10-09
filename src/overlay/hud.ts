@@ -1,7 +1,7 @@
 // Status pill: makes it obvious when LUMA is listening, looking, thinking or
 // talking. Shown on the display the user is working on.
 
-export type Phase = "idle" | "listening" | "thinking" | "speaking" | "acting" | "waiting" | "paused" | "error";
+export type Phase = "idle" | "listening" | "thinking" | "speaking" | "acting" | "waiting" | "teaching" | "paused" | "error";
 
 const LABELS: Record<Phase, string> = {
   idle: "",
@@ -10,6 +10,7 @@ const LABELS: Record<Phase, string> = {
   speaking: "",
   acting: "Working on it…",
   waiting: "Waiting for you: hold the shortcut and say yes or no",
+  teaching: "Your turn: I'm watching",
   paused: "Paused — not seeing or listening",
   error: "Something went wrong",
 };

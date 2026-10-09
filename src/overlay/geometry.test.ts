@@ -74,3 +74,31 @@ describe("helpers", () => {
     expect(minVisible({ x: 100, y: 100, w: 4, h: 4 })).toEqual({ x: 93, y: 93, w: 18, h: 18 });
   });
 });
+
+import { smoothPath, boundsOf } from "./geometry";
+
+describe("smoothPath", () => {
+  it("passes through every point and closes loops", () => {
+    const pts = [{ x: 0, y: 0 }, { x: 50, y: 40 }, { x: 100, y: 0 }];
+    const d = smoothPath(pts);
+    expect(d.startsWith("M0,0")).toBe(true);
+    expect(d).toContain(" 50,40C");
+    expect(d.endsWith(" 100,0")).toBe(true);
+    expect(smoothPath(pts, true).endsWith("Z")).toBe(true);
+    expect(smoothPath([{ x: 1, y: 2 }, { x: 3, y: 4 }])).toBe("M1,2L3,4");
+  });
+  it("bounds", () => {
+    expect(boundsOf([{ x: 5, y: 9 }, { x: 1, y: 3 }])).toEqual({ x: 1, y: 3, w: 4, h: 6 });
+  });
+});
+
+import { flightPath } from "./buddy";
+
+describe("flightPath", () => {
+  it("starts and ends exactly at the endpoints and arcs above them", () => {
+    const p = flightPath({ x: 0, y: 500 }, { x: 400, y: 500 });
+    expect(p[0]).toEqual({ x: 0, y: 500 });
+    expect(p[p.length - 1]).toEqual({ x: 400, y: 500 });
+    expect(Math.min(...p.map((q) => q.y))).toBeLessThan(500);
+  });
+});

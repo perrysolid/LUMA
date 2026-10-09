@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LUMA panel (mock)</title>
+    <link rel="stylesheet" href="/src/panel/panel.css" />
+    <script>
+      // Dev-only stand-in for the Tauri bridge so the real panel UI renders in a browser.
+      let cb = 0;
+      window.__TAURI_INTERNALS__ = {
+        transformCallback: () => ++cb,
+        invoke: async (cmd) => {
+          if (cmd === "get_settings")
+            return {
+              platform: "macos",
+              keys: { gemini: "env", assemblyai: "env", sarvam: "keychain" },
+              prefs: {
+                hotkey: "Command+Shift+Space", gemini_model: "gemini-3.8-flash", thinking_level: "low",
+                stt_model: "universal-3-5-pro", tts_speaker: "shubh", tts_language: "en-IN", tts_pace: 1.1,
+                max_image_edge: 1920, send_closeup: true, paused: false,
+                excluded_apps: ["1Password", "Bitwarden", "Keychain Access"],
+                annotate: "auto", long_press_ms: 2000, can_act: true, max_task_steps: 25,
+                gesture: true, fast_model: "gemini-3.5-flash", fast_thinking: "minimal",
+              },
+            };
+          return 1;
+        },
+      };
+    </script>
+  </head>
+  <body>
+    <header class="top">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <div>
+          <h1>LUMA</h1>
+          <p class="status" id="status">Starting…</p>
+        </div>
+      </div>
+      <button class="ghost" id="stop" title="Stop talking and clear the screen">Stop</button>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button role="tab" aria-selected="true" data-tab="talk">Talk</button>
+      <button role="tab" aria-selected="false" data-tab="settings">Settings</button>
+      <button role="tab" aria-selected="false" data-tab="privacy">Privacy</button>
+    </nav>
+
+    <main>
+      <section data-panel="talk">
+        <div class="hint" id="hint"></div>
+        <div class="log" id="log" aria-live="polite"></div>
+        <form class="ask" id="ask">
+          <input id="question" autocomplete="off" placeholder="Or type a question about your screen…" />
+          <button type="submit">Ask</button>
+        </form>
+      </section>
+
+      <section data-panel="settings" hidden>
+        <h2>API keys</h2>
+        <p class="muted">Stored in your system keychain. They are never shown again or sent anywhere except the provider.</p>
+        <div class="keys" id="keys"></div>
+
+        <h2>Voice</h2>
+        <div class="grid">
+          <label>Voice <select id="tts_speaker"></select></label>
+          <label>Language <select id="tts_language"></select></label>
+          <label>Speed <input id="tts_pace" type="range" min="0.7" max="1.6" step="0.05" /></label>
+        </div>
+
+        <h2>Brain</h2>
+        <label class="mode">Answer mode
+          <select id="mode">
+            <option value="accurate">Accurate: Gemini 3.8 Flash (best pointing, ~3.4 s)</option>
+            <option value="fast">Fast: Gemini 3.5 Flash (~2.2 s, less precise)</option>
+            <option value="custom">Custom (set below)</option>
+          </select>
+        </label>
+        <div class="grid">
+          <label>Gemini model <input id="gemini_model" spellcheck="false" /></label>
+          <label>Thinking
+            <select id="thinking_level">
+              <option value="minimal">Minimal (fastest)</option>
+              <option value="low">Low (recommended)</option>
+              <option value="medium">Medium</option>
+              <option value="high">High (slowest, deepest)</option>
+            </select>
+          </label>
+          <label>Speech-to-text model <input id="stt_model" spellcheck="false" /></label>
+          <label>Shortcut (hold to talk) <input id="hotkey" spellcheck="false" /></label>
+        </div>
+        <h2>Drawing &amp; doing</h2>
+        <div class="grid">
+          <label>Draw on screen
+            <select id="annotate">
+              <option value="long_press">Only when I hold the shortcut longer (saves tokens)</option>
+              <option value="always">Always</option>
+              <option value="never">Never (voice only)</option>
+            </select>
+          </label>
+          <label>Long press after (seconds) <input id="long_press_s" type="number" min="0.8" max="5" step="0.1" /></label>
+        </div>
+        <label class="check"><input type="checkbox" id="can_act" /> Let LUMA click and type to do tasks I ask for (it asks before anything consequential and never types passwords)</label>
+        <label class="check"><input type="checkbox" id="send_closeup" /> Send a close-up of the area around the pointer (sharper answers about small things)</label>
+        <div class="row"><button id="save">Save settings</button><span class="saved" id="saved"></span></div>
+
+        <h2>Permissions</h2>
+        <div class="muted" id="perm"></div>
+      </section>
+
+      <section data-panel="privacy" hidden>
+        <h2>What LUMA sees</h2>
+        <ul class="facts">
+          <li>Only while you hold the shortcut (or ask a typed question) does LUMA capture the screen your pointer is on and listen to the microphone.</li>
+          <li>The status pill on screen always shows when it is listening, looking, thinking or talking.</li>
+          <li>Screenshots and audio are sent to the AI providers for that one answer and are never saved by LUMA. Only the text of the conversation is kept in memory, until you quit or clear it.</li>
+        </ul>
+        <label class="check"><input type="checkbox" id="paused" /> Pause LUMA (no seeing, no listening)</label>
+        <h2>Never look at these apps</h2>
+        <p class="muted">One per line. If one of these is in front, LUMA refuses to capture.</p>
+        <textarea id="excluded_apps" rows="7" spellcheck="false"></textarea>
+        <div class="row">
+          <button id="save2">Save</button>
+          <button class="ghost" id="clear">Forget this conversation</button>
+          <span class="saved" id="saved2"></span>
+        </div>
+      </section>
+    </main>
+    <script type="module" src="/src/panel/main.ts"></script>
+<script type="module">setTimeout(()=>{const t=location.hash.slice(1);if(t)document.querySelector(`[data-tab="${t}"]`)?.click();},300)</script>
+  </body>
+</html>

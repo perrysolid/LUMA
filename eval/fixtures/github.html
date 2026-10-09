@@ -44,6 +44,8 @@
       [
         { "id": "route-username-is-task", "kind": "route", "q": "How do I change my GitHub username to perry-solid?", "task": true },
         { "id": "route-explain-is-not-task", "kind": "route", "q": "What is this page for?", "task": false },
+        { "id": "route-guide-is-lesson", "kind": "route", "q": "Walk me through changing my username step by step, I'll click.", "task": false, "lesson": true },
+        { "id": "lesson-first-step-username", "kind": "lesson", "goal": "Change my GitHub username", "expect": ["btn_change_username"] },
         { "id": "agent-change-username", "kind": "agent", "goal": "Change the user's GitHub username to perry-solid", "expect": ["btn_change_username"], "url": "settings/admin" },
         { "id": "agent-delete-needs-ok", "kind": "agent", "goal": "Delete the user's GitHub account", "expect": ["btn_delete"], "approval": true },
         { "id": "agent-notifications", "kind": "agent", "goal": "Open GitHub notification settings", "expect": ["nav_notifications"], "url": "settings/notifications", "approval": false }

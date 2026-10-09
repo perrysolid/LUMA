@@ -26,41 +26,87 @@ Each phase ends buildable, tested, and usable. ✅ done · 🔜 next · ⏳ late
 - ✅ Tray: "Check overlay alignment"
 - ✅ Eval: routing and agent first-step cases; 24/24 on gemini-3.8-flash
 
-## Phase 2 — Precision grounding 🔜
-- Accessibility snapping. Read the element tree (AXUIElement on macOS, UI
-  Automation on Windows) around the pointer and the predicted boxes, and snap a
-  model box to the element frame with the best IoU and matching role/name.
-  Native controls then get pixel-exact boxes.
-- Selected text and focused element in context (AX `AXSelectedText`, UIA `TextPattern`)
-- Secure-field detection: black out `AXSecureTextField` / `IsPassword` regions before upload
-- Zoom-and-refine pass for targets under ~24 pt: re-ask on a tight crop
-- On-device OCR (Apple Vision / Windows.Media.Ocr) to snap text highlights to real line boxes
-- True magnifier for `<zoom>`: send the captured crop to the overlay
+## Phase 2 — Precision grounding ✅
+- ✅ Accessibility snapping (macOS): one AX hit test at each box/circle/step/point
+  plus its ancestors (a few ms); the frame with the best IoU and matching name
+  replaces the model's box, so native controls get pixel-exact edges. Panes and
+  windows never win; weak matches keep the model's box. Pure logic in
+  `luma_core::snap`, unit tested. Needs Accessibility access, silently off without it.
+- ✅ Same for Windows via UI Automation `ElementFromPoint` + control-view parents
+  (150 ms connection/transaction timeouts). Type-checked; not yet run on a Windows machine.
+- ✅ Chromium/Electron apps (Chrome, Slack, VS Code…) get their accessibility tree switched on (`AXManualAccessibility`)
+- ✅ Local voice commands, no model call: "never mind" / "stop" cancels, "repeat that" /
+  "say that again" / "phir se" replays the last answer with its drawings
+- ✅ Keyboard focus and selected text in the context block (AX `AXFocusedUIElement` / `AXSelectedText`,
+  UIA `GetFocusedElement` / `TextPattern`); "this" prefers the selection
+- ✅ Password fields blacked out in every capture before it leaves the machine
+  (AX `AXSecureTextField`, UIA `IsPassword`; bounded walk ≤ 600 elements / 80 ms)
+- ✅ Zoom-and-refine: marks under 24 pt that AX did not snap are re-asked on a native-resolution
+  crop (fast model) and swapped in when the answer is consistent (`luma_core::refine`)
+- ✅ On-device OCR (Apple Vision / Windows.Media.Ocr) snaps highlights and underlines to real text lines
+- ✅ True magnifier for `<zoom>`: the native-resolution crop is shown as an inset beside the target
 
-## Phase 3 — Teaching mode ⏳
-- A "lesson" state machine on the session: goal → step → expected screen state
-- "Let me try": after each step, poll cheap screen diffs and re-check only when the screen changes
-- Correct with a pointer and a one-line reason; "Why?", "Go deeper", "Continue from where we left off" (session persisted locally, opt-in)
+## Phase 3 — Teaching mode ✅
+- ✅ "Teach me how to…" → `<lesson goal>` → one step at a time: point + say → watch thumbnail diffs →
+  check after the screen settles → next step, a gentle correction, or done (`luma_core::lesson`, `src-tauri/src/lesson.rs`)
+- ✅ Pressing the shortcut pauses for a question ("why?", "go deeper"); the lesson resumes by itself,
+  or on "continue" / "next" / "where were we"; "stop the lesson" ends it
+- ✅ Opt-in: remember lesson progress (text only) for "continue from where we left off" after a restart
+- ✅ Eval: routing (teach vs do vs explain) and first-step pointing, 100%
 
-## Phase 4 — Acting on the computer (core shipped in 1.5; next:)
-- Gemini Computer Use tool (Gemini 3.5+ Flash) for planning; actions executed by LUMA, never by the model directly
-- Executor: AX actions first (`AXPress`, UIA `Invoke`), synthetic input fallback (CGEvent / SendInput)
-- Verify after every action: screen diff plus AX state plus a model check of the expected change. Retry with another strategy, or ask.
-- Risk tiers: observe/annotate (auto) · navigate (auto) · modify (confirm) · send, publish, pay, delete, credentials, security settings (explicit approval with a spoken and visual summary)
-- Action history: "what did you change?", "undo that" via app undo where available, honest reporting where it is not
-- Prompt-injection guard: on-screen text is data. Actions are planned only from the user's request.
+## Phase 4 — Acting on the computer ✅
+- ✅ Executor: accessibility press first (`AXPress`, UIA `Invoke`) for buttons, links, menu items;
+  synthetic click as the fallback; the cursor still glides there so the user sees it
+- ✅ Verify after every action: screen diff + reading the focused field back after typing
+  ("verified" / "did not land"), both fed to the next model step
+- ✅ Risk tiers: security/access actions (2FA, passkeys, authorize, invite, make public…) need approval
+- ✅ Action history: "what did you change?" reads back the last task's changes; "undo that" presses
+  undo once in the same app, checks the screen changed and reports honestly when it did not
+- ✅ Prompt-injection guard in code: emails, handles, long numbers and web addresses in a task goal
+  must come from the user's words (or the app they are in), otherwise the task is refused
+- Decided against: the Gemini Computer Use tool. It is browser-scoped, while LUMA acts on the whole
+  desktop, and the tag protocol already passes every agent eval case.
 
-## Phase 5 — Latency and presence ⏳
-- Optional Gemini Live (native audio) "fast mode" with the same tag protocol over the transcript channel
-- Sarvam WebSocket TTS for the first utterance
-- Warm STT connection for a few seconds after a turn (follow-ups start instantly)
-- On-device STT fallback when AssemblyAI credits run out (Apple SpeechAnalyzer / Windows speech)
-- Open-mic mode with echo cancellation (macOS voice-processing IO, Windows AEC)
+## Phase 5 — Latency and presence ✅
+- ✅ Fast mode (opt-in): Gemini Live native audio over one websocket per turn; push-to-talk via
+  manual activity detection; drawing through a non-blocking `draw` function resolved like tags;
+  first audio ~0.6 s after release (smoke test) vs ~3 s for the standard pipeline; 88% on the eval.
+  Tasks, lessons and typed questions stay on the standard pipeline; falls back for 5 min if Live fails
+- ✅ Sarvam WebSocket TTS: one stream per turn, ~200 ms to first audio, gapless PCM playback
+- ✅ Warm STT: a session is opened after each answer and reused for a follow-up within 6 s (~1 s saved)
+- ✅ On-device STT fallback when AssemblyAI fails or has no key (macOS Speech, on-device only; the
+  turn's audio is kept in memory only). Windows: not yet (no recorded-audio API in Windows speech)
+- ✅ Conversation mode (opt-in): after LUMA finishes speaking it listens hands-free for a few seconds,
+  including for yes/no to a task's question. The mic opens only after LUMA stops talking.
+- Not done: interrupting LUMA by voice *while it speaks*. That needs echo cancellation (macOS
+  voice-processing I/O, Windows AEC) inside the audio stack; pressing the shortcut still interrupts.
 
-## Phase 6 — Distribution ⏳
-- GitHub Actions release builds (workflow included); signing with an Apple Developer ID and notarization; Windows Trusted Signing
-- Auto-update (Tauri updater)
-- Optional key proxy with short-lived tokens, for users who should not bring their own keys
+## Freehand diagrams ✅
+- ✅ LUMA draws its own diagrams on a whiteboard panel: `<board>`, `<node>` (box with text),
+  `<arrow>` between nodes, `<sketch>` (smooth freehand stroke, open or closed), `<point>`;
+  arrows that name a node not drawn yet wait for it. Also in fast mode via the draw function.
+- ✅ Eval `sketch` (board, ≥3 readable non-overlapping nodes inside it, ≥2 arrows) and `draws`
+  (arrows / pointer actually resolve): 100% in standard, quick and fast modes
+- ✅ In-place annotation of drawings, videos and whiteboards: lines are traced with marker strokes in the
+  drawing's own colours, never boxed or covered; `luma_core::ink` snaps traces onto the real ink
+  (only segments that run along a drawn line; new shapes are left as drawn). Eval `trace`: 12/12
+- ✅ The board is see-through, and a board that lands on busy content moves (with its diagram) to the
+  emptiest area of the same size
+
+## Responsiveness
+- ✅ The companion cursor no longer depends on requestAnimationFrame, which WebKit can pause in
+  transparent overlays (it then never moved). Overlays log their frame health to the app log
+- ✅ Accessibility / OCR snapping and refine run in the background; they never delay speech
+- ✅ Hedged answers: if the accurate model is silent for 6 s, the fast model starts too and the first
+  to answer wins (p90 first token 18 s → 7 s on the eval); a spoken "one moment" after 4 s of silence
+
+## Phase 6 — Distribution ✅ (needs your accounts to switch on)
+- ✅ Release workflow: macOS (arm64 + x64) and Windows; Developer ID signing + notarization,
+  Windows Trusted Signing and signed updater artifacts, each enabled by its GitHub secrets
+- ✅ Hardened-runtime entitlements (microphone) and Info.plist usage strings
+- ✅ Auto-update (Tauri updater, minisign-verified): checks at launch and every 6 h; offered in the tray, never silent
+- ✅ Optional key proxy (`crates/luma-proxy`): keys stay on a server; devices get bearer tokens with
+  access to exactly LUMA's calls, rate-limited; short-lived AssemblyAI tokens. See docs/DISTRIBUTION.md
 
 ## Eval targets
 | Metric | Gate before a release |

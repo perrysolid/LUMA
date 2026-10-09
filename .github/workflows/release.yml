@@ -1,4 +1,8 @@
 name: release
+# Push a tag like v0.2.0 to build draft releases for macOS (Apple silicon and
+# Intel) and Windows. Every secret below is optional: without them the build
+# is unsigned (fine for testing), with them it is signed, notarized and
+# auto-updatable. See docs/DISTRIBUTION.md.
 on:
   push:
     tags: ["v*"]
@@ -26,12 +30,50 @@ jobs:
           targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
       - run: npm ci
+      - run: npm test
+
+      # Build config from whichever secrets exist: updater artifacts need the
+      # updater key; Windows signing needs Azure Trusted Signing.
+      - name: Release config
+        shell: bash
+        env:
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          HAS_AZURE: ${{ secrets.AZURE_CLIENT_ID != '' }}
+          TRUSTED_SIGNING_ENDPOINT: ${{ secrets.TRUSTED_SIGNING_ENDPOINT }}
+          TRUSTED_SIGNING_ACCOUNT: ${{ secrets.TRUSTED_SIGNING_ACCOUNT }}
+          TRUSTED_SIGNING_PROFILE: ${{ secrets.TRUSTED_SIGNING_PROFILE }}
+        run: |
+          updater=false
+          [ "$HAS_UPDATER_KEY" = "true" ] && updater=true
+          sign=""
+          if [ "$HAS_AZURE" = "true" ] && [ "$RUNNER_OS" = "Windows" ]; then
+            cargo install trusted-signing-cli --locked
+            sign=", \"windows\": { \"signCommand\": \"trusted-signing-cli -e $TRUSTED_SIGNING_ENDPOINT -a $TRUSTED_SIGNING_ACCOUNT -c $TRUSTED_SIGNING_PROFILE -d LUMA %1\" }"
+          fi
+          echo "{ \"bundle\": { \"createUpdaterArtifacts\": $updater $sign } }" > src-tauri/tauri.release.conf.json
+          cat src-tauri/tauri.release.conf.json
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional signing (see docs/ROADMAP.md): APPLE_CERTIFICATE, APPLE_ID, APPLE_PASSWORD, APPLE_TEAM_ID
+          # Updater artifacts (latest.json + .sig) are signed with this key.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # macOS Developer ID signing + notarization.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Windows Trusted Signing (read by trusted-signing-cli).
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: LUMA ${{ github.ref_name }}
+          releaseBody: See the assets below to download and install LUMA.
           releaseDraft: true
-          args: ${{ matrix.args }}
+          includeUpdaterJson: true
+          args: ${{ matrix.args }} --config src-tauri/tauri.release.conf.json

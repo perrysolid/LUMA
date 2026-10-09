@@ -1,6 +1,18 @@
 [workspace]
 resolver = "2"
-members = ["crates/luma-core", "crates/luma-net", "crates/luma-eval", "src-tauri"]
+members = ["crates/luma-core", "crates/luma-net", "crates/luma-eval", "crates/luma-proxy", "src-tauri"]
+
+# Screenshot capture, resizing and JPEG encoding are ~30x slower unoptimized
+# (5 s vs 0.2 s per turn), so dev builds optimize dependencies and the
+# image path too. LUMA's own app code stays fast to rebuild.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.luma-net]
+opt-level = 3
+
+[profile.dev.package.luma-core]
+opt-level = 3
 
 [profile.release]
 codegen-units = 1

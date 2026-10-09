@@ -44,7 +44,15 @@
           <label>Voice <select id="tts_speaker"></select></label>
           <label>Language <select id="tts_language"></select></label>
           <label>Speed <input id="tts_pace" type="range" min="0.7" max="1.6" step="0.05" /></label>
+          <label>Conversation engine
+            <select id="voice_engine">
+              <option value="standard">Standard: every feature (speech-to-text → Gemini → voice)</option>
+              <option value="live">Fast mode: Gemini Live native audio (answers in under a second)</option>
+            </select>
+          </label>
         </div>
+        <label class="check"><input type="checkbox" id="follow_up" /> After an answer, keep listening a few seconds for a follow-up (no shortcut needed)</label>
+        <label class="check"><input type="checkbox" id="warm_stt" /> Keep speech recognition ready for a few seconds after each answer (faster follow-ups)</label>
 
         <h2>Brain</h2>
         <label class="mode">Answer mode
@@ -66,19 +74,24 @@
           </label>
           <label>Speech-to-text model <input id="stt_model" spellcheck="false" /></label>
           <label>Shortcut (hold to talk) <input id="hotkey" spellcheck="false" /></label>
+          <label>LUMA proxy URL (optional) <input id="proxy_url" spellcheck="false" placeholder="https://luma-proxy.example.com" /></label>
         </div>
         <h2>Drawing &amp; doing</h2>
         <div class="grid">
           <label>Draw on screen
             <select id="annotate">
-              <option value="long_press">Only when I hold the shortcut longer (saves tokens)</option>
+              <option value="auto">When I ask to be shown, or it clearly helps</option>
               <option value="always">Always</option>
               <option value="never">Never (voice only)</option>
             </select>
           </label>
-          <label>Long press after (seconds) <input id="long_press_s" type="number" min="0.8" max="5" step="0.1" /></label>
+          <label>Point-and-ask after holding the trackpad (seconds) <input id="long_press_s" type="number" min="0.6" max="5" step="0.1" /></label>
         </div>
+        <label class="check"><input type="checkbox" id="gesture" /> Point-and-ask: hold the trackpad or mouse button still on something, then ask about it (or stay quiet for an explanation)</label>
+        <label class="check"><input type="checkbox" id="snap_to_elements" /> Snap boxes to the exact edges of buttons and controls (uses Accessibility access)</label>
         <label class="check"><input type="checkbox" id="can_act" /> Let LUMA click and type to do tasks I ask for (it asks before anything consequential and never types passwords)</label>
+        <label class="check"><input type="checkbox" id="refine_small" /> Double-check small targets (icons, thin rows) on a close-up before pointing</label>
+        <label class="check"><input type="checkbox" id="remember_lessons" /> Remember lesson progress so “continue where we left off” works after quitting (text only)</label>
         <label class="check"><input type="checkbox" id="send_closeup" /> Send a close-up of the area around the pointer (sharper answers about small things)</label>
         <div class="row"><button id="save">Save settings</button><span class="saved" id="saved"></span></div>
 

@@ -12,6 +12,9 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{client::IntoClientRequest, http::HeaderValue, Message};
 
+/// Hands-free: give up if the user says nothing for this long.
+pub const HANDS_FREE_SILENCE: Duration = Duration::from_millis(5000);
+
 #[derive(Debug, Clone)]
 pub enum SttEvent {
     Partial(String),
@@ -31,24 +34,71 @@ struct ServerMsg {
     error: Option<String>,
 }
 
-/// Streams `audio` until the channel closes, then returns the full transcript.
-pub async fn transcribe(
-    api_key: &str,
-    model: &str,
-    mut audio: mpsc::Receiver<Vec<u8>>,
-    events: mpsc::UnboundedSender<SttEvent>,
-) -> Result<String> {
+type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+
+/// An open streaming session, ready for audio. Opening one ahead of time
+/// ("warm") removes the connection setup from the next turn.
+pub struct SttConn {
+    ws: Ws,
+    hands_free: bool,
+    pub opened: std::time::Instant,
+}
+
+impl SttConn {
+    pub fn hands_free(&self) -> bool {
+        self.hands_free
+    }
+}
+
+pub async fn connect(api_key: &str, model: &str, hands_free: bool) -> Result<SttConn> {
     let url = format!(
-        "wss://streaming.assemblyai.com/v3/ws?sample_rate={}&encoding=pcm_s16le&speech_model={}&max_turn_silence=4000",
+        "wss://streaming.assemblyai.com/v3/ws?sample_rate={}&encoding=pcm_s16le&speech_model={}&max_turn_silence={}",
         crate::STT_RATE,
-        model
+        model,
+        if hands_free { 1400 } else { 4000 }
     );
-    let mut req = url.into_client_request()?;
-    req.headers_mut().insert("Authorization", HeaderValue::from_str(api_key)?);
+    // Through a key proxy: a short-lived token instead of the account key.
+    let req = match crate::route::assemblyai_token().await? {
+        Some(token) => format!("{url}&token={token}").into_client_request()?,
+        None => {
+            let mut r = url.into_client_request()?;
+            r.headers_mut().insert("Authorization", HeaderValue::from_str(api_key)?);
+            r
+        }
+    };
     let (ws, _) = tokio::time::timeout(Duration::from_secs(5), tokio_tungstenite::connect_async(req))
         .await
         .map_err(|_| anyhow!("speech-to-text connection timed out"))?
         .map_err(|e| anyhow!("speech-to-text connection failed: {}", redact(&e.to_string())))?;
+    Ok(SttConn { ws, hands_free, opened: std::time::Instant::now() })
+}
+
+/// Push-to-talk: streams `audio` until the channel closes (key released),
+/// then returns the full transcript.
+///
+/// Hands-free (`hands_free = true`): returns at the first natural end of
+/// turn, or after `HANDS_FREE_SILENCE` with no speech at all (empty string).
+pub async fn transcribe(
+    api_key: &str,
+    model: &str,
+    audio: mpsc::Receiver<Vec<u8>>,
+    events: mpsc::UnboundedSender<SttEvent>,
+    hands_free: bool,
+) -> Result<String> {
+    let conn = connect(api_key, model, hands_free).await?;
+    transcribe_on(conn, audio, events).await
+}
+
+/// Stream a turn over an already open session.
+pub async fn transcribe_on(
+    conn: SttConn,
+    mut audio: mpsc::Receiver<Vec<u8>>,
+    events: mpsc::UnboundedSender<SttEvent>,
+) -> Result<String> {
+    let hands_free = conn.hands_free;
+    let ws = conn.ws;
+    let started = std::time::Instant::now();
+    let mut heard_anything = false;
     let (mut tx, mut rx) = ws.split();
 
     let writer = async move {
@@ -70,6 +120,14 @@ pub async fn transcribe(
             w = &mut writer, if !writer_done => {
                 writer_done = true;
                 tx_back = Some(w?);
+            }
+            _ = tokio::time::sleep(Duration::from_millis(250)), if hands_free => {
+                if !heard_anything && started.elapsed() > HANDS_FREE_SILENCE {
+                    break;
+                }
+                if started.elapsed() > Duration::from_secs(30) {
+                    break;
+                }
             }
             msg = async {
                 if writer_done {
@@ -99,11 +157,16 @@ pub async fn transcribe(
                         finals.retain(|(o, _)| *o != m.turn_order);
                         finals.push((m.turn_order, m.transcript.trim().to_string()));
                         tail.clear();
-                        if writer_done {
+                        let has_words = !m.transcript.trim().is_empty();
+                        heard_anything |= has_words;
+                        if writer_done || (hands_free && has_words) {
                             break;
                         }
                     }
-                    "Turn" => tail = m.transcript.trim().to_string(),
+                    "Turn" => {
+                        tail = m.transcript.trim().to_string();
+                        heard_anything |= !tail.is_empty();
+                    }
                     "Termination" => break,
                     _ => {}
                 }

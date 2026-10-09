@@ -3,6 +3,9 @@
 pub mod assemblyai;
 pub mod gemini;
 pub mod sarvam;
+pub mod sarvam_ws;
+pub mod live;
+pub mod route;
 pub mod vision;
 
 /// Audio sample rate expected by the streaming speech-to-text.

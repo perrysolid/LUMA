@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>LUMA sketch demo</title>
+    <link rel="stylesheet" href="/src/overlay/overlay.css" />
+    <style>
+      /* A busy "editor" underneath, so the board's readability shows */
+      #page { position: fixed; inset: 0; background: #1e1f24; color: #c9d1d9; font: 14px/1.6 ui-monospace, Menlo, monospace; padding: 30px 40px; overflow: hidden; }
+      #page .ln { color: #6e7681; display: inline-block; width: 34px; }
+      #share { position: absolute; top: 18px; right: 28px; background: #2563eb; color: #fff; font: 600 15px system-ui; padding: 8px 18px; border-radius: 18px; }
+    </style>
+  </head>
+  <body>
+    <div id="page"></div>
+    <div id="share">Share</div>
+    <svg id="stage" xmlns="http://www.w3.org/2000/svg">
+      <g id="layer-spot"></g>
+      <g id="layer-shapes"></g>
+      <g id="layer-arrows"></g>
+      <g id="layer-steps"></g>
+    </svg>
+    <div id="labels"></div>
+    <div id="pointer" hidden data-state="speaking">
+      <svg viewBox="0 0 32 32" width="26" height="26" aria-hidden="true"><path d="M4 3 L27 14 L16.5 17 L12 28 Z" /></svg>
+      <div class="buddy-badge" hidden><i></i><i></i><i></i></div>
+      <div class="pointer-label" hidden></div>
+    </div>
+    <script type="module" src="./sketch-demo.ts"></script>
+  </body>
+</html>

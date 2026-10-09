@@ -134,6 +134,84 @@ body {
   box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
 }
 
+/* ---------- LUMA's own diagrams (board / node / sketch) ---------- */
+:root {
+  --board-bg: rgba(255, 253, 247, 0.94);
+  --board-ink: #1d1a33;
+  --sketch-font: "Bradley Hand", "Chalkboard SE", "Segoe Print", "Comic Sans MS", var(--font);
+}
+.board-title {
+  position: absolute;
+  font: 700 22px var(--sketch-font);
+  color: #fff;
+  text-shadow: 0 0 2px rgba(10, 8, 30, 0.95), 0 0 8px rgba(10, 8, 30, 0.8), 0 0 14px rgba(124, 92, 255, 0.6);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* glass: readable over light or dark content, without hiding it */
+.node-fill {
+  fill: rgba(22, 18, 48, 0.62);
+}
+.node-text {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 0 6px;
+  box-sizing: border-box;
+  font-family: var(--sketch-font);
+  font-weight: 700;
+  line-height: 1.1;
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+  overflow: hidden;
+}
+:root {
+  --accent-hand: #b9a8ff;
+}
+/* a marker stroke: bright core, soft dark edge so it reads on any background */
+.sketch .stroke {
+  stroke: var(--marker, var(--accent));
+  stroke-width: 5.5;
+  filter: drop-shadow(0 0 6px var(--marker, var(--accent)));
+}
+/* a white core keeps a stroke visible even on a line of the same colour */
+.sketch .halo {
+  stroke-width: 11;
+  stroke: rgba(10, 8, 30, 0.55);
+}
+.sketch .core {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+/* handwritten label beside a sketch, in the stroke's colour */
+.label.hand {
+  background: none;
+  box-shadow: none;
+  padding: 0 4px;
+  font: 700 22px var(--sketch-font);
+  text-shadow: 0 0 2px rgba(10, 8, 30, 0.95), 0 0 6px rgba(10, 8, 30, 0.85);
+}
+
+.magnifier {
+  position: absolute;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.42), 0 0 0 2.5px var(--accent), 0 0 0 5px var(--halo);
+}
+.magnifier img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  image-rendering: auto;
+}
+
 /* ---------- HUD ---------- */
 #hud {
   position: fixed;
@@ -321,6 +399,13 @@ body {
 }
 #pointer[data-state="waiting"] path {
   fill: #ffb020;
+}
+#pointer[data-state="teaching"] path {
+  fill: #29b6f6;
+}
+[data-phase="teaching"] .hud-dot {
+  background: #29b6f6;
+  animation: pulse 2s ease-in-out infinite;
 }
 [data-phase="acting"] .hud-dot {
   background: #2fbf71;

@@ -1,7 +1,12 @@
 mod agent;
 mod audio;
+mod ax;
 mod companion;
 mod input;
+mod lesson;
+mod live_turn;
+mod local_stt;
+mod ocr;
 mod screen;
 mod settings;
 
@@ -18,6 +23,8 @@ use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, ShortcutState};
 
 pub struct AppState {
+    /// An update found by the updater, waiting for the user to install it.
+    pub update: Mutex<Option<tauri_plugin_updater::Update>>,
     pub prefs: Mutex<Prefs>,
     pub prefs_path: PathBuf,
     pub session: Mutex<Session>,
@@ -45,8 +52,10 @@ fn get_settings(state: tauri::State<AppState>) -> SettingsView {
 }
 
 #[tauri::command]
-fn save_key(provider: Provider, key: String) -> Result<(), String> {
-    set_key(provider, &key).map_err(|e| e.to_string())
+fn save_key(state: tauri::State<AppState>, provider: Provider, key: String) -> Result<(), String> {
+    set_key(provider, &key).map_err(|e| e.to_string())?;
+    settings::apply_proxy(&state.prefs.lock().unwrap());
+    Ok(())
 }
 
 #[tauri::command]
@@ -57,6 +66,7 @@ fn save_prefs(app: AppHandle, state: tauri::State<AppState>, prefs: Prefs) -> Re
         let _ = app.global_shortcut().unregister(old_hotkey.as_str());
     }
     prefs.save(&state.prefs_path).map_err(|e| e.to_string())?;
+    settings::apply_proxy(&prefs);
     *state.prefs.lock().unwrap() = prefs;
     refresh_tray(&app);
     Ok(())
@@ -119,9 +129,21 @@ struct CursorEvent {
     y: f64,
 }
 
-/// Streams the mouse position (display-local view points) to the overlays so
-/// the companion cursor can follow it. Polls at ~60 Hz but only emits when
-/// the pointer actually moves; idle cost is negligible.
+#[derive(Clone, Serialize)]
+struct HoldEvent {
+    display: usize,
+    x: f64,
+    y: f64,
+    /// 0..1 while charging, 1 when fired, -1 when cancelled.
+    progress: f64,
+}
+
+/// Mouse tracking for the companion cursor, plus the point-and-ask gesture.
+///
+/// Reads the pointer and button state straight from the OS (~60 Hz, any
+/// thread, no permission needed) and emits only on change. A press held
+/// still for `long_press_ms` on someone else's app triggers a hands-free,
+/// drawing turn about that spot; a filling ring shows it charging.
 fn spawn_cursor_tracker(app: AppHandle) {
     std::thread::Builder::new()
         .name("luma-cursor".into())
@@ -130,9 +152,16 @@ fn spawn_cursor_tracker(app: AppHandle) {
             let mut refreshed = std::time::Instant::now();
             let mut last: Option<CursorEvent> = None;
             let mut hidden = false;
+            // (started, where, fired, shown)
+            let mut press: Option<(std::time::Instant, luma_core::geometry::Point, bool, bool)> = None;
+            let mut last_hold_emit = std::time::Instant::now();
             loop {
                 std::thread::sleep(std::time::Duration::from_millis(16));
-                let paused = app.state::<AppState>().prefs.lock().unwrap().paused;
+                let st = app.state::<AppState>();
+                let (paused, gesture, hold_ms) = {
+                    let p = st.prefs.lock().unwrap();
+                    (p.paused, p.gesture, p.long_press_ms.max(600))
+                };
                 if paused {
                     if !hidden {
                         let _ = app.emit("luma://cursor", Option::<CursorEvent>::None);
@@ -156,9 +185,59 @@ fn spawn_cursor_tracker(app: AppHandle) {
                     let _ = app.emit("luma://cursor", Some(&ev));
                     last = Some(ev);
                 }
+
+                // ---- long-press gesture
+                if !gesture {
+                    continue;
+                }
+                let down = screen::left_button_down();
+                match (&mut press, down) {
+                    (None, true) => press = Some((std::time::Instant::now(), p, false, false)),
+                    (Some((t0, at, fired, shown)), true) => {
+                        let moved = ((p.x - at.x).powi(2) + (p.y - at.y).powi(2)).sqrt() / d.input_per_point;
+                        if moved > 8.0 {
+                            if *shown {
+                                let _ = app.emit("luma://hold", HoldEvent { display: d.index, x: v.x, y: v.y, progress: -1.0 });
+                            }
+                            press = None; // a drag, not a long-press
+                            continue;
+                        }
+                        let ms = t0.elapsed().as_millis() as u64;
+                        if *fired || ms < 350 {
+                            continue;
+                        }
+                        let busy = st.companion.is_busy() || own_window_focused(&app);
+                        if busy {
+                            continue;
+                        }
+                        let av = d.input_to_view(*at);
+                        if ms >= hold_ms {
+                            *fired = true;
+                            let _ = app.emit("luma://hold", HoldEvent { display: d.index, x: av.x, y: av.y, progress: 1.0 });
+                            st.companion.on_gesture(&app, *at);
+                        } else if last_hold_emit.elapsed().as_millis() >= 40 {
+                            *shown = true;
+                            last_hold_emit = std::time::Instant::now();
+                            let progress = (ms - 350) as f64 / (hold_ms - 350) as f64;
+                            let _ = app.emit("luma://hold", HoldEvent { display: d.index, x: av.x, y: av.y, progress });
+                        }
+                    }
+                    (Some((_, _, fired, shown)), false) => {
+                        if *shown && !*fired {
+                            let _ = app.emit("luma://hold", HoldEvent { display: d.index, x: v.x, y: v.y, progress: -1.0 });
+                        }
+                        press = None;
+                    }
+                    (None, false) => {}
+                }
             }
         })
         .expect("cursor thread");
+}
+
+/// Long-presses inside LUMA's own panel are just clicks.
+fn own_window_focused(app: &AppHandle) -> bool {
+    app.get_webview_window("main").and_then(|w| w.is_focused().ok()).unwrap_or(false)
 }
 
 /// Draws a box exactly around the active window and marks the pointer. If the
@@ -350,6 +429,61 @@ fn elevate_overlay(w: &tauri::WebviewWindow) {
 #[cfg(not(target_os = "macos"))]
 fn elevate_overlay(_w: &tauri::WebviewWindow) {}
 
+/// Signed updates from GitHub Releases: checked shortly after launch and
+/// every 6 hours. Never installed silently; the tray offers it.
+fn spawn_update_checker(app: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+        loop {
+            check_for_update(&app, false).await;
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 3600)).await;
+        }
+    });
+}
+
+async fn check_for_update(app: &AppHandle, tell: bool) {
+    use tauri_plugin_updater::UpdaterExt;
+    let found = match app.updater() {
+        Ok(u) => u.check().await,
+        Err(e) => Err(e),
+    };
+    match found {
+        Ok(Some(u)) => {
+            log::info!("update available: {}", u.version);
+            let _ = app.emit("luma://notice", format!("LUMA {} is available. Install it from the menu bar icon.", u.version));
+            *app.state::<AppState>().update.lock().unwrap() = Some(u);
+            refresh_tray(app);
+        }
+        Ok(None) => {
+            if tell {
+                let _ = app.emit("luma://notice", "LUMA is up to date.");
+            }
+        }
+        Err(e) => {
+            log::debug!("update check failed: {e}");
+            if tell {
+                let _ = app.emit("luma://notice", "Couldn't check for updates right now.");
+            }
+        }
+    }
+}
+
+async fn update_clicked(app: &AppHandle) {
+    let pending = app.state::<AppState>().update.lock().unwrap().take();
+    let Some(update) = pending else {
+        show_panel(app);
+        return check_for_update(app, true).await;
+    };
+    let _ = app.emit("luma://notice", format!("Downloading LUMA {}…", update.version));
+    match update.download_and_install(|_, _| {}, || {}).await {
+        Ok(()) => app.restart(),
+        Err(e) => {
+            log::warn!("update failed: {e}");
+            let _ = app.emit("luma://notice", format!("The update didn't install: {e}"));
+        }
+    }
+}
+
 fn refresh_tray(app: &AppHandle) {
     let Some(tray) = app.tray_by_id("luma") else { return };
     if let Ok(menu) = build_tray_menu(app) {
@@ -370,11 +504,13 @@ fn build_tray_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
         None::<&str>,
     )?;
     let clear = MenuItem::with_id(app, "clear", "Forget this session", true, None::<&str>)?;
+    let update = st.update.lock().unwrap().as_ref().map(|u| format!("Install LUMA {} and restart", u.version));
+    let update = MenuItem::with_id(app, "update", update.as_deref().unwrap_or("Check for updates"), true, None::<&str>)?;
     let align = MenuItem::with_id(app, "align", "Check overlay alignment", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", "Quit LUMA", true, None::<&str>)?;
     Menu::with_items(
         app,
-        &[&hint, &PredefinedMenuItem::separator(app)?, &open, &pause, &clear, &align, &PredefinedMenuItem::separator(app)?, &quit],
+        &[&hint, &PredefinedMenuItem::separator(app)?, &open, &pause, &clear, &align, &update, &PredefinedMenuItem::separator(app)?, &quit],
     )
 }
 
@@ -383,6 +519,7 @@ pub fn run() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("luma=info,luma_lib=info")).init();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(|app, _shortcut, event| {
@@ -402,8 +539,10 @@ pub fn run() {
             settings::load_env_files(Some(&config_dir));
             let prefs_path = config_dir.join("prefs.json");
             let prefs = Prefs::load(&prefs_path);
+            settings::apply_proxy(&prefs);
             let hotkey = prefs.hotkey.clone();
             app.manage(AppState {
+                update: Mutex::new(None),
                 prefs: Mutex::new(prefs),
                 prefs_path,
                 session: Mutex::new(Session::new()),
@@ -434,6 +573,10 @@ pub fn run() {
                             st.session.lock().unwrap().clear();
                         }
                         "align" => check_alignment(app),
+                        "update" => {
+                            let app = app.clone();
+                            tauri::async_runtime::spawn(async move { update_clicked(&app).await });
+                        }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -448,6 +591,11 @@ pub fn run() {
             match screen::displays() {
                 Ok(d) => sync_overlays(&handle, &d),
                 Err(e) => log::error!("{e}"),
+            }
+            spawn_update_checker(handle.clone());
+            {
+                use tauri::Listener;
+                handle.listen("luma://overlay-health", |e| log::info!("overlay health: {}", e.payload()));
             }
             spawn_cursor_tracker(handle.clone());
             spawn_annotation_watcher(handle.clone());

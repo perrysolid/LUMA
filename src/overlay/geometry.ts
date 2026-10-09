@@ -143,3 +143,33 @@ export function minVisible(r: Rect, min = 18): Rect {
   const h = Math.max(r.h, min);
   return { x: r.x - (w - r.w) / 2, y: r.y - (h - r.h) / 2, w, h };
 }
+
+/**
+ * A smooth SVG path through `pts` (Catmull-Rom → cubic Béziers), for
+ * freehand sketch strokes. `closed` joins the end back to the start.
+ */
+export function smoothPath(pts: Pt[], closed = false): string {
+  if (pts.length === 0) return "";
+  if (pts.length === 1) return `M${pts[0].x},${pts[0].y}`;
+  if (pts.length === 2 && !closed) return `M${pts[0].x},${pts[0].y}L${pts[1].x},${pts[1].y}`;
+  const n = pts.length;
+  const at = (i: number) => (closed ? pts[(i + n) % n] : pts[Math.max(0, Math.min(n - 1, i))]);
+  const r = (v: number) => Math.round(v * 10) / 10;
+  let d = `M${r(pts[0].x)},${r(pts[0].y)}`;
+  const segs = closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+    const c1 = { x: p1.x + (p2.x - p0.x) / 6, y: p1.y + (p2.y - p0.y) / 6 };
+    const c2 = { x: p2.x - (p3.x - p1.x) / 6, y: p2.y - (p3.y - p1.y) / 6 };
+    d += `C${r(c1.x)},${r(c1.y)} ${r(c2.x)},${r(c2.y)} ${r(p2.x)},${r(p2.y)}`;
+  }
+  return closed ? d + "Z" : d;
+}
+
+/** Bounding box of points. */
+export function boundsOf(pts: Pt[]): Rect {
+  const xs = pts.map((p) => p.x);
+  const ys = pts.map((p) => p.y);
+  const x = Math.min(...xs), y = Math.min(...ys);
+  return { x, y, w: Math.max(1, Math.max(...xs) - x), h: Math.max(1, Math.max(...ys) - y) };
+}

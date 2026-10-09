@@ -86,7 +86,10 @@ pub fn start_mic(chunks: mpsc::Sender<Vec<u8>>, level: impl Fn(f32) + Send + 'st
 }
 
 pub enum SpeakerCmd {
+    /// A complete encoded clip (WAV).
     Play(Vec<u8>),
+    /// Raw PCM16 mono samples at `rate`, appended gaplessly (streaming TTS).
+    Pcm(Vec<i16>, u32),
     Callback(Box<dyn Fn() + Send>),
     Stop,
 }
@@ -118,6 +121,12 @@ impl Speaker {
                         Ok(d) => player.append(d),
                         Err(e) => log::warn!("undecodable audio clip: {e}"),
                     },
+                    SpeakerCmd::Pcm(samples, rate) => {
+                        if let (Some(ch), Some(sr)) = (std::num::NonZero::new(1u16), std::num::NonZero::new(rate)) {
+                            let data: Vec<f32> = samples.iter().map(|&s| s as f32 / 32768.0).collect();
+                            player.append(rodio::buffer::SamplesBuffer::new(ch, sr, data));
+                        }
+                    }
                     SpeakerCmd::Callback(f) => player.append(rodio::source::EmptyCallback::new(f)),
                     SpeakerCmd::Stop => {
                         // Dropping the queue (incl. pending callbacks) is the

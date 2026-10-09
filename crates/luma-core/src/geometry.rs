@@ -202,6 +202,17 @@ impl SentImage {
     }
 }
 
+/// An OS input-space rect in capture pixels, clipped to the capture (None
+/// when it does not overlap it). Used to black out regions before upload.
+pub fn input_rect_to_capture_px(r: &Rect, display: &Display, capture: &Capture) -> Option<Rect> {
+    let (vw, vh) = display.view_size();
+    let sx = capture.width_px as f64 / vw;
+    let sy = capture.height_px as f64 / vh;
+    let tl = display.input_to_view(Point::new(r.x, r.y));
+    let px = Rect::new(tl.x * sx, tl.y * sy, r.w / display.input_per_point * sx, r.h / display.input_per_point * sy);
+    px.intersection(&Rect::new(0.0, 0.0, capture.width_px as f64, capture.height_px as f64))
+}
+
 /// Resize dimensions so the long edge is <= `max_edge`, preserving aspect.
 pub fn fit_within(w: u32, h: u32, max_edge: u32) -> (u32, u32) {
     let long = w.max(h);
@@ -313,6 +324,25 @@ pub fn view_to_image_px(p: Point, img: &SentImage, display: &Display) -> Option<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn input_rects_map_to_capture_pixels() {
+        // Windows: input is physical px at 1.5x; capture is the same pixels.
+        let d = Display {
+            index: 0,
+            name: "w".into(),
+            input_frame: Rect::new(-3000.0, 0.0, 3000.0, 2000.0),
+            input_per_point: 1.5,
+            scale_factor: 1.5,
+            is_primary: false,
+        };
+        let cap = Capture { display_index: 0, width_px: 3000, height_px: 2000 };
+        let r = input_rect_to_capture_px(&Rect::new(-2700.0, 150.0, 300.0, 60.0), &d, &cap).unwrap();
+        assert!((r.x - 300.0).abs() < 1e-6 && (r.y - 150.0).abs() < 1e-6 && (r.w - 300.0).abs() < 1e-6);
+        // partly off-display is clipped; fully off is None
+        assert_eq!(input_rect_to_capture_px(&Rect::new(-3100.0, 0.0, 200.0, 10.0), &d, &cap).unwrap().w, 100.0);
+        assert!(input_rect_to_capture_px(&Rect::new(10.0, 0.0, 50.0, 10.0), &d, &cap).is_none());
+    }
+
     use super::*;
 
     fn approx(a: f64, b: f64) -> bool {

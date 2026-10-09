@@ -4,6 +4,8 @@
 <dict>
   <key>NSMicrophoneUsageDescription</key>
   <string>LUMA listens only while you hold the shortcut, so you can talk to it.</string>
+  <key>NSSpeechRecognitionUsageDescription</key>
+  <string>If the online speech service is unavailable, LUMA can understand you on this Mac instead. Audio never leaves your computer.</string>
   <key>LSUIElement</key>
   <true/>
 </dict>

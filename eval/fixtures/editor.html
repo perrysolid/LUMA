@@ -18,7 +18,7 @@
     </style>
   </head>
   <body data-app="Google Chrome">
-    <div class="menu"><b>Quarterly report</b><span>File</span><span>Edit</span><span>View</span><span>Insert</span><span>Format</span><span>Tools</span></div>
+    <div class="menu"><b>Quarterly report</b><span>File</span><span>Edit</span><span>View</span><span data-truth="menu_insert" data-label="Insert menu">Insert</span><span>Format</span><span>Tools</span></div>
     <div class="bar">
       <div class="btn" data-truth="undo" data-label="Undo"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-3" /></svg></div>
       <div class="btn" data-truth="redo" data-label="Redo"><svg viewBox="0 0 24 24"><path d="m15 14 5-5-5-5" /><path d="M20 9H9a5 5 0 0 0 0 10h3" /></svg></div>
@@ -51,7 +51,12 @@
         { "id": "editor-share", "kind": "locate", "q": "How do I share this document with my team?", "expect": ["share"] },
         { "id": "editor-image", "kind": "locate", "q": "Show me how to add a picture.", "expect": ["image"] },
         { "id": "editor-this-icon", "kind": "refer", "q": "What does this button do?", "pointer": "align_center", "expect": ["align_center"] },
-        { "id": "editor-this-para", "kind": "refer", "q": "Summarize this paragraph.", "pointer": "para1", "expect": ["para1"] }
+        { "id": "editor-this-para", "kind": "refer", "q": "Summarize this paragraph.", "pointer": "para1", "expect": ["para1"] },
+        { "id": "sketch-web-request", "kind": "sketch", "q": "Draw me a simple diagram of how a web request goes from the browser to a server and then a database." },
+        { "id": "draws-point-share", "kind": "draws", "q": "Point at the share button.", "ops": ["point"], "expect": ["share"] },
+        { "id": "route-teach-picture", "kind": "route", "q": "Teach me how to add a picture here, I want to learn to do it myself.", "task": false, "lesson": true },
+        { "id": "lesson-first-step-image", "kind": "lesson", "goal": "Insert a picture into the document", "expect": ["image", "menu_insert"] },
+        { "id": "lesson-first-step-bold", "kind": "lesson", "goal": "Make the selected text bold", "expect": ["bold"] }
       ]
     </script>
     <script src="truth.js"></script>

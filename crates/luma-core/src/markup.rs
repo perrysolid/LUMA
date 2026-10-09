@@ -14,10 +14,10 @@
 
 use std::collections::BTreeMap;
 
-/// Visual tags plus `task` (hand-off to the agent).
+/// Visual tags plus `task` (hand-off to the agent) and `lesson` (teaching mode).
 pub const KNOWN_TAGS: &[&str] = &[
     "box", "circle", "highlight", "underline", "point", "arrow", "step", "spotlight", "zoom",
-    "focus", "clear", "label", "task",
+    "focus", "clear", "label", "task", "lesson", "board", "node", "sketch",
 ];
 
 /// Longest tag we will buffer before deciding it is not a tag.

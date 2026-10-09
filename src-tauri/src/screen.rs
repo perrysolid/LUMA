@@ -105,8 +105,84 @@ pub fn displays() -> Result<Vec<Display>> {
     Ok(out)
 }
 
+#[cfg(target_os = "macos")]
+mod native {
+    use std::ffi::c_void;
+    #[repr(C)]
+    struct CGPoint {
+        x: f64,
+        y: f64,
+    }
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventCreate(source: *const c_void) -> *mut c_void;
+        fn CGEventGetLocation(event: *mut c_void) -> CGPoint;
+        fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
+    }
+    #[link(name = "CoreFoundation", kind = "framework")]
+    extern "C" {
+        fn CFRelease(cf: *const c_void);
+    }
+    /// Global display coordinates in points, origin top-left of the primary
+    /// display: exactly LUMA's input space. Safe off the main thread.
+    pub fn pointer() -> Option<(f64, f64)> {
+        unsafe {
+            let e = CGEventCreate(std::ptr::null());
+            if e.is_null() {
+                return None;
+            }
+            let p = CGEventGetLocation(e);
+            CFRelease(e);
+            Some((p.x, p.y))
+        }
+    }
+    pub fn left_button_down() -> bool {
+        // kCGEventSourceStateCombinedSessionState = 0, kCGMouseButtonLeft = 0
+        unsafe { CGEventSourceButtonState(0, 0) }
+    }
+}
+
+#[cfg(target_os = "windows")]
+mod native {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+    /// Virtual-desktop physical pixels (process is per-monitor DPI aware).
+    pub fn pointer() -> Option<(f64, f64)> {
+        let mut p = POINT { x: 0, y: 0 };
+        (unsafe { GetCursorPos(&mut p) } != 0).then_some((p.x as f64, p.y as f64))
+    }
+    pub fn left_button_down() -> bool {
+        (unsafe { GetAsyncKeyState(VK_LBUTTON as i32) } as u16 & 0x8000) != 0
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+mod native {
+    pub fn pointer() -> Option<(f64, f64)> {
+        None
+    }
+    pub fn left_button_down() -> bool {
+        false
+    }
+}
+
+/// Whether the primary mouse / trackpad button is held right now.
+pub fn left_button_down() -> bool {
+    native::left_button_down()
+}
+
+/// Pointer position in OS input space, read directly from the OS (cheap,
+/// any thread).
+pub fn pointer_native() -> Option<Point> {
+    native::pointer().map(|(x, y)| Point::new(x, y))
+}
+
 /// Pointer position in OS input space.
 pub fn pointer<R: Runtime>(app: &AppHandle<R>, displays: &[Display]) -> Option<Point> {
+    if let Some(p) = pointer_native() {
+        return Some(p);
+    }
     let p = app.cursor_position().ok()?;
     if cfg!(target_os = "macos") {
         // tao converts NSEvent.mouseLocation (global points) to "physical"
@@ -145,9 +221,12 @@ pub fn active_window() -> Option<ActiveWindow> {
 pub struct RawSnapshot {
     pub displays: Vec<Display>,
     pub display: Display,
+    /// Password fields are already blacked out.
     pub full: DynamicImage,
     pub pointer_view: Option<Point>,
     pub window: ActiveWindow,
+    /// Keyboard focus and selection in the front app, when readable.
+    pub focus: Option<crate::ax::Focus>,
 }
 
 /// What a turn sends to the model.
@@ -156,6 +235,7 @@ pub struct Snapshot {
     pub display: Display,
     pub images: Vec<EncodedImage>,
     pub window: ActiveWindow,
+    pub focus: Option<crate::ax::Focus>,
     /// Pointer in image-1 model coordinates `(y, x)`.
     pub pointer_norm: Option<(f64, f64)>,
     pub pointer_norm_closeup: Option<(f64, f64)>,
@@ -193,14 +273,48 @@ pub fn capture(displays: Vec<Display>, pointer: Option<Point>, prefer: Option<us
         .or_else(|| displays.iter().find(|d| d.is_primary))
         .unwrap_or(&displays[0])
         .clone();
-    let full = capture_display(display.index)?;
+    let mut full = capture_display(display.index)?;
+    let redacted = redact(&mut full, &display, &crate::ax::secure_fields());
+    if redacted > 0 {
+        log::debug!("blacked out {redacted} password field(s)");
+    }
     Ok(RawSnapshot {
         pointer_view: pointer.map(|p| display.input_to_view(p)).filter(|p| display.view_bounds().contains(*p)),
         window: active_window().unwrap_or_default(),
+        focus: crate::ax::focus(),
         displays,
         display,
         full,
     })
+}
+
+/// Paint `fields` (OS input space) solid black in a capture of `display`.
+/// Returns how many touched the capture.
+pub fn redact(img: &mut DynamicImage, display: &Display, fields: &[Rect]) -> usize {
+    let cap = luma_core::geometry::Capture { display_index: display.index, width_px: img.width(), height_px: img.height() };
+    let mut n = 0;
+    for f in fields {
+        let Some(r) = luma_core::geometry::input_rect_to_capture_px(f, display, &cap) else { continue };
+        // a little margin so no glyph edges survive
+        let r = Rect::new(r.x - 2.0, r.y - 2.0, r.w + 4.0, r.h + 4.0)
+            .intersection(&Rect::new(0.0, 0.0, cap.width_px as f64, cap.height_px as f64));
+        let Some(r) = r else { continue };
+        let black = image::Rgba([0, 0, 0, 255]);
+        let rgba = match img.as_mut_rgba8() {
+            Some(b) => b,
+            None => {
+                *img = DynamicImage::ImageRgba8(img.to_rgba8());
+                img.as_mut_rgba8().expect("rgba")
+            }
+        };
+        for y in r.y.floor() as u32..(r.bottom().ceil() as u32).min(cap.height_px) {
+            for x in r.x.floor() as u32..(r.right().ceil() as u32).min(cap.width_px) {
+                rgba.put_pixel(x, y, black);
+            }
+        }
+        n += 1;
+    }
+    n
 }
 
 impl RawSnapshot {
@@ -212,8 +326,67 @@ impl RawSnapshot {
             display: self.display.clone(),
             images: prepared.images,
             window: self.window.clone(),
+            focus: self.focus.clone(),
             pointer_norm: prepared.pointer_norm,
             pointer_norm_closeup: prepared.pointer_norm_closeup,
         })
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn password_fields_are_painted_black_in_capture_pixels() {
+        // Retina: 2 capture px per point; field at input (100, 50) 40×10 pt.
+        let d = Display {
+            index: 0,
+            name: "d".into(),
+            input_frame: Rect::new(0.0, 0.0, 400.0, 200.0),
+            input_per_point: 1.0,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let mut img = DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(800, 400, image::Rgba([200, 200, 200, 255])));
+        assert_eq!(redact(&mut img, &d, &[Rect::new(100.0, 50.0, 40.0, 10.0), Rect::new(900.0, 0.0, 5.0, 5.0)]), 1);
+        let px = |x, y| img.as_rgba8().unwrap().get_pixel(x, y).0;
+        assert_eq!(px(200, 100), [0, 0, 0, 255]);
+        assert_eq!(px(279, 119), [0, 0, 0, 255]);
+        assert_eq!(px(290, 130), [200, 200, 200, 255]);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    #[test]
+    fn native_pointer_reads_without_main_thread() {
+        let h = std::thread::spawn(|| (super::pointer_native(), super::left_button_down()));
+        let (p, down) = h.join().unwrap();
+        let p = p.expect("pointer");
+        assert!(p.x.is_finite() && p.y.is_finite());
+        let displays = super::displays().unwrap();
+        assert!(luma_core::geometry::display_at(&displays, p).is_some());
+        println!("pointer at {p:?}, button down: {down}, displays: {:?}", displays);
+    }
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod bench {
+    /// `cargo test -p luma bench_capture -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn bench_capture_and_encode() {
+        let displays = super::displays().unwrap();
+        let p = super::pointer_native();
+        let t = std::time::Instant::now();
+        let raw = super::capture(displays, p, None).unwrap();
+        let cap = t.elapsed().as_millis();
+        for (edge, closeup) in [(1280, true), (1920, true)] {
+            let t = std::time::Instant::now();
+            let s = raw.encode(&super::CaptureOptions { max_edge: edge, closeup }).unwrap();
+            let bytes: usize = s.images.iter().map(|i| i.jpeg.len()).sum();
+            println!("capture {cap} ms; encode {edge}: {} ms, {} KB", t.elapsed().as_millis(), bytes / 1024);
+        }
     }
 }

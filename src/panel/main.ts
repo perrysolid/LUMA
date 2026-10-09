@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
-type Provider = "gemini" | "assemblyai" | "sarvam";
+type Provider = "gemini" | "assemblyai" | "sarvam" | "proxy";
 
 interface Prefs {
   hotkey: string;
@@ -17,12 +17,21 @@ interface Prefs {
   paused: boolean;
   annotate: string;
   long_press_ms: number;
+  gesture: boolean;
+  snap_to_elements: boolean;
+  refine_small: boolean;
+  proxy_url: string;
+  voice_engine: string;
+  live_model: string;
+  follow_up: boolean;
+  warm_stt: boolean;
+  remember_lessons: boolean;
   can_act: boolean;
   max_task_steps: number;
 }
 interface SettingsView {
   prefs: Prefs;
-  keys: Record<Provider, "env" | "keychain" | null>;
+  keys: Record<Provider, "env" | "keychain" | "proxy" | null>;
   platform: string;
 }
 
@@ -30,6 +39,7 @@ const PROVIDERS: { id: Provider; name: string; help: string; required: boolean }
   { id: "gemini", name: "Gemini", help: "aistudio.google.com → Get API key", required: true },
   { id: "assemblyai", name: "AssemblyAI", help: "Speech-to-text. assemblyai.com/dashboard", required: true },
   { id: "sarvam", name: "Sarvam", help: "Voice. dashboard.sarvam.ai (optional: captions only without it)", required: false },
+  { id: "proxy", name: "LUMA proxy token", help: "Only if your team runs a LUMA key proxy (set its URL below)", required: false },
 ];
 
 const SPEAKERS =
@@ -84,10 +94,11 @@ function prettyHotkey(h: string, platform: string) {
 
 function render() {
   const p = view.prefs;
-  const missing = PROVIDERS.filter((x) => x.required && !view.keys[x.id]);
+  // On a Mac, speech can fall back to on-device recognition.
+  const missing = PROVIDERS.filter((x) => x.required && !view.keys[x.id] && !(x.id === "assemblyai" && view.platform === "macos"));
   $("hint").innerHTML = missing.length
     ? `To start, add your ${missing.map((m) => m.name).join(" and ")} key in <b>Settings</b>.`
-    : `Hold ${prettyHotkey(p.hotkey, view.platform)} and ask, then release. <b>Quick press</b>: spoken answer. <b>Hold ${(p.long_press_ms / 1000).toFixed(1)} s+</b>: LUMA also draws on your screen.${p.can_act ? " Ask it to <i>do</i> something (“change my GitHub username”) and it will, asking before anything important." : ""} Press again to stop.`;
+    : `Hold ${prettyHotkey(p.hotkey, view.platform)} and ask, then release. Say “show me” and LUMA draws on your screen.${p.gesture ? ` Or hold the trackpad still on something for ${(p.long_press_ms / 1000).toFixed(1)} s and ask about it.` : ""}${p.can_act ? " Ask it to <i>do</i> something (“change my GitHub username”) and it will, asking before anything important." : ""} Say “teach me how to…” and it guides you one step at a time while you do it. Press again to stop.`;
 
   const keys = $("keys");
   keys.innerHTML = "";
@@ -96,7 +107,8 @@ function render() {
     row.className = "keyrow";
     const src = view.keys[prov.id];
     const ok = src !== null;
-    const status = src === "env" ? "✓ from .env" : src === "keychain" ? "✓ saved" : prov.required ? "required" : "optional";
+    const status =
+      src === "env" ? "✓ from .env" : src === "keychain" ? "✓ saved" : src === "proxy" ? "✓ via proxy" : prov.required ? "required" : "optional";
     row.innerHTML = `<label>${prov.name} <span class="${ok ? "ok" : "missing"}">${status}</span>
         <input type="password" autocomplete="off" spellcheck="false" placeholder="${src === "env" ? "Set in .env (takes priority)" : ok ? "Paste to replace" : prov.help}" /></label>
         <button class="ghost">Save</button>`;
@@ -124,6 +136,14 @@ function render() {
   $<HTMLInputElement>("send_closeup").checked = p.send_closeup;
   $<HTMLSelectElement>("annotate").value = p.annotate;
   $<HTMLInputElement>("long_press_s").value = (p.long_press_ms / 1000).toFixed(1);
+  $<HTMLInputElement>("gesture").checked = p.gesture;
+  $<HTMLInputElement>("snap_to_elements").checked = p.snap_to_elements;
+  $<HTMLInputElement>("refine_small").checked = p.refine_small;
+  $<HTMLInputElement>("proxy_url").value = p.proxy_url;
+  $<HTMLSelectElement>("voice_engine").value = p.voice_engine;
+  $<HTMLInputElement>("follow_up").checked = p.follow_up;
+  $<HTMLInputElement>("warm_stt").checked = p.warm_stt;
+  $<HTMLInputElement>("remember_lessons").checked = p.remember_lessons;
   $<HTMLInputElement>("can_act").checked = p.can_act;
   $<HTMLInputElement>("paused").checked = p.paused;
   $<HTMLTextAreaElement>("excluded_apps").value = p.excluded_apps.join("\n");
@@ -146,7 +166,15 @@ function collect(): Prefs {
     hotkey: $<HTMLInputElement>("hotkey").value.trim(),
     send_closeup: $<HTMLInputElement>("send_closeup").checked,
     annotate: $<HTMLSelectElement>("annotate").value,
-    long_press_ms: Math.round(Math.min(5, Math.max(0.8, Number($<HTMLInputElement>("long_press_s").value) || 1.8)) * 1000),
+    long_press_ms: Math.round(Math.min(5, Math.max(0.6, Number($<HTMLInputElement>("long_press_s").value) || 2)) * 1000),
+    gesture: $<HTMLInputElement>("gesture").checked,
+    snap_to_elements: $<HTMLInputElement>("snap_to_elements").checked,
+    refine_small: $<HTMLInputElement>("refine_small").checked,
+    proxy_url: $<HTMLInputElement>("proxy_url").value.trim(),
+    voice_engine: $<HTMLSelectElement>("voice_engine").value,
+    follow_up: $<HTMLInputElement>("follow_up").checked,
+    warm_stt: $<HTMLInputElement>("warm_stt").checked,
+    remember_lessons: $<HTMLInputElement>("remember_lessons").checked,
     can_act: $<HTMLInputElement>("can_act").checked,
     excluded_apps: $<HTMLTextAreaElement>("excluded_apps")
       .value.split("\n")

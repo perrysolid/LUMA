@@ -18,11 +18,23 @@ const out = join(here, "out");
 mkdirSync(out, { recursive: true });
 const common = ["--headless=new", "--disable-gpu", "--hide-scrollbars", `--window-size=${W},${H}`, `--force-device-scale-factor=${DPR}`, "--allow-file-access-from-files", "--virtual-time-budget=3000"];
 
+// Headless Chrome sometimes exits non-zero after doing its job (e.g. when a
+// normal Chrome is running); keep the output if there is some.
+function run(args, opts) {
+  try {
+    return execFileSync(chrome, args, opts);
+  } catch (e) {
+    if (e.stdout && String(e.stdout).length > 0) return e.stdout;
+    if (opts.stdio === "ignore") return "";
+    throw e;
+  }
+}
+
 for (const f of readdirSync(join(here, "fixtures")).filter((f) => f.endsWith(".html"))) {
   const name = f.replace(/\.html$/, "");
   const url = pathToFileURL(resolve(here, "fixtures", f)).href;
-  execFileSync(chrome, [...common, `--screenshot=${join(out, name + ".png")}`, url], { stdio: "ignore" });
-  const dom = execFileSync(chrome, [...common, "--dump-dom", url], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 });
+  run([...common, `--screenshot=${join(out, name + ".png")}`, url], { stdio: "ignore" });
+  const dom = run([...common, "--dump-dom", url], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 26 });
   const m = dom.match(/<script type="application\/json" id="truth-out">([\s\S]*?)<\/script>/);
   if (!m) throw new Error(`no truth for ${name}`);
   const truth = JSON.parse(m[1].replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">"));

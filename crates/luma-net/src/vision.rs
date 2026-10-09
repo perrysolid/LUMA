@@ -111,6 +111,95 @@ pub fn encode(full: &DynamicImage, s: &SentImage) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// A magnified inset for `<zoom>`: the region around `rect` (view points)
+/// at native resolution, as a JPEG data URL the overlay can show. Long edge
+/// at most 900 px.
+pub fn magnifier_data_url(full: &DynamicImage, display: &Display, rect: &luma_core::geometry::Rect) -> Result<String> {
+    use base64::Engine;
+    let (vw, vh) = display.view_size();
+    let sx = full.width() as f64 / vw;
+    let sy = full.height() as f64 / vh;
+    let pad = 8.0;
+    let r = luma_core::geometry::Rect::new((rect.x - pad) * sx, (rect.y - pad) * sy, (rect.w + 2.0 * pad) * sx, (rect.h + 2.0 * pad) * sy)
+        .intersection(&luma_core::geometry::Rect::new(0.0, 0.0, full.width() as f64, full.height() as f64))
+        .ok_or_else(|| anyhow::anyhow!("zoom region is off screen"))?;
+    let crop = full.crop_imm(r.x as u32, r.y as u32, (r.w as u32).max(1), (r.h as u32).max(1));
+    let crop = if crop.width().max(crop.height()) > 900 { crop.resize(900, 900, FilterType::Triangle) } else { crop };
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90).encode_image(&crop.to_rgb8())?;
+    Ok(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(out)))
+}
+
+/// Put a `<sketch>` stroke exactly on the line it traces (see
+/// `luma_core::ink`): points move onto the nearest drawn stroke within ~18 pt
+/// and gaps are filled in along it. Other marks are returned unchanged.
+pub fn snap_sketch_to_ink(a: &luma_core::annotation::Annotation, full: &DynamicImage, display: &Display) -> luma_core::annotation::Annotation {
+    use luma_core::annotation::Annotation;
+    let Annotation::Sketch { points, .. } = a else { return a.clone() };
+    let (vw, _) = display.view_size();
+    let s = full.width() as f64 / vw;
+    let owned;
+    let rgba = match full.as_rgba8() {
+        Some(b) => b,
+        None => {
+            owned = full.to_rgba8();
+            &owned
+        }
+    };
+    let img = luma_core::ink::Rgba { width: rgba.width(), height: rgba.height(), data: rgba.as_raw() };
+    let px: Vec<(f64, f64)> = points.iter().map(|p| (p.x * s, p.y * s)).collect();
+    let snapped = luma_core::ink::snap_path(&img, &px, 18.0 * s, 14.0 * s);
+    let mut out = a.clone();
+    if let Annotation::Sketch { points, .. } = &mut out {
+        *points = snapped.into_iter().map(|(x, y)| Point::new(x / s, y / s)).collect();
+    }
+    out
+}
+
+/// Keep LUMA's own diagram off the user's content: if a `<board>` landed on a
+/// busy part of the screen, move it (and, through the resolver, everything
+/// drawn inside it) to the emptiest area of the same size nearby. Other marks,
+/// and boards already on empty space, are returned unchanged.
+pub fn place_board(
+    a: luma_core::annotation::Annotation,
+    resolver: &mut luma_core::annotation::Resolver,
+    full: &DynamicImage,
+    display: &Display,
+) -> luma_core::annotation::Annotation {
+    use luma_core::annotation::Annotation;
+    use luma_core::geometry::{DisplayRect, Rect};
+    let Annotation::Board { display: d, id, rect, title } = a else { return a };
+    if d != display.index {
+        return Annotation::Board { display: d, id, rect, title };
+    }
+    let (vw, _) = display.view_size();
+    let s = full.width() as f64 / vw;
+    let owned;
+    let rgba = match full.as_rgba8() {
+        Some(b) => b,
+        None => {
+            owned = full.to_rgba8();
+            &owned
+        }
+    };
+    let img = luma_core::ink::Rgba { width: rgba.width(), height: rgba.height(), data: rgba.as_raw() };
+    let grid = luma_core::ink::BusyGrid::new(&img, (12.0 * s).round().max(4.0) as u32);
+    let here = grid.busy(rect.x * s, rect.y * s, rect.w * s, rect.h * s);
+    let moved = (here > 0.15)
+        .then(|| grid.emptiest(rect.w * s, rect.h * s, (rect.x * s, rect.y * s)))
+        .flatten()
+        .filter(|&(_, _, b)| b < 0.1 && b < here * 0.5)
+        .map(|(x, y, _)| Rect::new(x / s, y / s, rect.w, rect.h));
+    match moved {
+        Some(new) => {
+            resolver.shift_region(DisplayRect { display_index: d, rect }, Point::new(new.x - rect.x, new.y - rect.y));
+            resolver.update_item(&id, DisplayRect { display_index: d, rect: new });
+            Annotation::Board { display: d, id, rect: new, title }
+        }
+        None => Annotation::Board { display: d, id, rect, title },
+    }
+}
+
 /// A 64×40 grayscale fingerprint of a screen, for cheap change detection.
 pub const THUMB_W: u32 = 64;
 pub const THUMB_H: u32 = 40;
@@ -160,6 +249,26 @@ mod tests {
         // content scrolled by 30px: stripes swap
         let scrolled = image::RgbaImage::from_fn(1440, 900, |x, y| *base.get_pixel(x, (y + 30) % 900));
         assert!(changed_fraction(&a, &thumbnail(&DynamicImage::ImageRgba8(scrolled))) > 0.3);
+    }
+
+    #[test]
+    fn magnifier_crops_the_region_at_native_resolution() {
+        let d = Display {
+            index: 0,
+            name: "t".into(),
+            input_frame: Rect::new(0.0, 0.0, 1440.0, 900.0),
+            input_per_point: 1.0,
+            scale_factor: 2.0,
+            is_primary: true,
+        };
+        let full = DynamicImage::ImageRgba8(image::RgbaImage::new(2880, 1800));
+        let url = magnifier_data_url(&full, &d, &Rect::new(100.0, 100.0, 40.0, 20.0)).unwrap();
+        assert!(url.starts_with("data:image/jpeg;base64,"));
+        use base64::Engine;
+        let bytes = base64::engine::general_purpose::STANDARD.decode(&url[23..]).unwrap();
+        let img = image::load_from_memory(&bytes).unwrap();
+        assert_eq!((img.width(), img.height()), (112, 72), "(40+16)×2 by (20+16)×2");
+        assert!(magnifier_data_url(&full, &d, &Rect::new(5000.0, 0.0, 10.0, 10.0)).is_err());
     }
 
     #[test]

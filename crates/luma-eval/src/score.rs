@@ -48,6 +48,12 @@ pub struct Case {
     /// route cases: whether the reply should start a task
     #[serde(default)]
     pub task: Option<bool>,
+    /// draws cases: annotation ops that must appear ("arrow", "point", ...)
+    #[serde(default)]
+    pub ops: Vec<String>,
+    /// route cases: whether the reply should start a lesson (absent = no)
+    #[serde(default)]
+    pub lesson: Option<bool>,
     /// agent cases: whether the first action must require approval
     #[serde(default)]
     pub approval: Option<bool>,
@@ -67,7 +73,28 @@ pub struct Fixture {
     #[serde(default)]
     pub title: String,
     pub targets: BTreeMap<String, Target>,
+    /// Ground-truth line segments [x1, y1, x2, y2] (view points), for trace cases.
+    #[serde(default)]
+    pub lines: BTreeMap<String, [f64; 4]>,
     pub cases: Vec<Case>,
+}
+
+/// How well a stroke lies on a segment: (mean distance of its points to the
+/// segment, fraction of the segment's length it spans).
+pub fn trace_fit(points: &[Point], seg: [f64; 4]) -> (f64, f64) {
+    let [x1, y1, x2, y2] = seg;
+    let (dx, dy) = (x2 - x1, y2 - y1);
+    let len2 = (dx * dx + dy * dy).max(1e-9);
+    let mut ts = Vec::new();
+    let mut dist = 0.0;
+    for p in points {
+        let t = (((p.x - x1) * dx + (p.y - y1) * dy) / len2).clamp(0.0, 1.0);
+        ts.push(t);
+        dist += ((x1 + t * dx - p.x).powi(2) + (y1 + t * dy - p.y).powi(2)).sqrt();
+    }
+    let n = points.len().max(1) as f64;
+    let span = ts.iter().cloned().fold(0.0, f64::max) - ts.iter().cloned().fold(1.0, f64::min);
+    (dist / n, span.max(0.0))
 }
 
 #[derive(Serialize, Default)]
@@ -122,7 +149,8 @@ fn mark_rect(a: &Annotation) -> Option<Rect> {
         | Annotation::Label { rect, .. }
         | Annotation::Focus { rect, .. }
         | Annotation::Spotlight { rect, .. }
-        | Annotation::Zoom { rect, .. } => Some(*rect),
+        | Annotation::Zoom { rect, .. }
+        | Annotation::Node { rect, .. } => Some(*rect),
         _ => None,
     }
 }
@@ -163,6 +191,72 @@ pub fn score_case(
     };
     let target = |id: &str| fx.targets.get(id).map(|t| t.rect());
     match case.kind.as_str() {
+        "trace" => {
+            // annotate in place: a stroke ON the expected line, no board,
+            // and no box swallowing the figure
+            let seg = case.expect.first().and_then(|id| fx.lines.get(id)).copied();
+            let best = seg.and_then(|seg| {
+                marks
+                    .iter()
+                    .filter_map(|m| match m {
+                        Annotation::Sketch { points, .. } => Some(trace_fit(points, seg)),
+                        _ => None,
+                    })
+                    .min_by(|a, b| (a.0 - a.1 * 20.0).total_cmp(&(b.0 - b.1 * 20.0)))
+            });
+            let board = marks.iter().any(|m| matches!(m, Annotation::Board { .. }));
+            // a box that swallows the figure: it encloses a whole traced line
+            let encloses = |r: &Rect| {
+                let r = Rect::new(r.x - 10.0, r.y - 10.0, r.w + 20.0, r.h + 20.0);
+                fx.lines.values().any(|l| r.contains(Point::new(l[0], l[1])) && r.contains(Point::new(l[2], l[3])) && ((l[2] - l[0]).hypot(l[3] - l[1]) > 150.0))
+            };
+            let huge_box = marks.iter().any(|m| matches!(m, Annotation::Shape { rect, kind: luma_core::annotation::ShapeKind::Box | luma_core::annotation::ShapeKind::Circle, .. } if encloses(rect)));
+            // within about one marker-stroke width of the line, along most of it
+            let on_line = best.is_some_and(|(d, span)| d <= 8.0 && span >= 0.7);
+            r.best_iou = best.map(|(d, _)| d);
+            r.coverage = best.map(|(_, s)| s);
+            r.pass = on_line && !board && !huge_box && dropped == 0;
+            r.raw = format!("trace {best:?} board {board} huge_box {huge_box}. {}", r.raw);
+        }
+        "sketch" => {
+            // LUMA's own diagram: a board, readable nodes inside it, arrows.
+            let board = marks.iter().find_map(|m| match m {
+                Annotation::Board { rect, .. } => Some(*rect),
+                _ => None,
+            });
+            let nodes: Vec<Rect> = marks.iter().filter_map(|m| match m { Annotation::Node { rect, .. } => Some(*rect), _ => None }).collect();
+            let arrows = marks.iter().filter(|m| matches!(m, Annotation::Arrow { .. })).count();
+            let inside = board.is_some_and(|b| {
+                let b = Rect::new(b.x - 6.0, b.y - 6.0, b.w + 12.0, b.h + 12.0);
+                nodes.iter().all(|n| b.contains(Point::new(n.x, n.y)) && b.contains(Point::new(n.right() - 0.01, n.bottom() - 0.01)))
+            });
+            let overlapping = nodes.iter().enumerate().any(|(i, a)| nodes[i + 1..].iter().any(|b| a.intersection(b).is_some_and(|x| x.area() > 0.1 * a.area().min(b.area()))));
+            let readable = nodes.iter().all(|n| n.w >= 60.0 && n.h >= 28.0);
+            r.coverage = Some(nodes.len() as f64);
+            r.pass = board.is_some() && nodes.len() >= 3 && arrows >= 2 && inside && !overlapping && readable && dropped == 0;
+            r.raw = format!(
+                "board {} nodes {} arrows {arrows} inside {inside} overlapping {overlapping} readable {readable} dropped {dropped}. {}",
+                board.is_some(),
+                nodes.len(),
+                r.raw
+            );
+        }
+        "draws" => {
+            let ops: Vec<String> = marks
+                .iter()
+                .filter_map(|m| serde_json::to_value(m).ok())
+                .filter_map(|v| v.get("op").and_then(|o| o.as_str()).map(str::to_string))
+                .collect();
+            let all = case.ops.iter().all(|o| ops.contains(o));
+            // where an expected target is given, a mark of the first op must hit it
+            let on_target = match case.expect.first().and_then(|id| target(id)) {
+                Some(t) => marks.iter().filter(|m| serde_json::to_value(m).ok().and_then(|v| v.get("op").and_then(|o| o.as_str()).map(|o| Some(o) == case.ops.first().map(String::as_str))).unwrap_or(false)).filter_map(mark_rect).any(|m| hits(&m, &t)),
+                None => true,
+            };
+            r.first_hit = case.expect.first().map(|_| on_target);
+            r.pass = all && on_target && dropped == 0;
+            r.raw = format!("ops {ops:?} dropped {dropped}. {}", r.raw);
+        }
         "locate" | "refer" => {
             if let Some(t) = case.expect.first().and_then(|id| target(id)) {
                 let first = rects.first().map(|m| hits(m, &t));
@@ -271,6 +365,8 @@ mod tests {
             say: vec![],
             goal: None,
             task: None,
+            lesson: None,
+            ops: Vec::new(),
             approval: None,
             url: None,
         }

@@ -14,16 +14,19 @@ pub enum Provider {
     Gemini,
     Assemblyai,
     Sarvam,
+    /// Per-device token for a LUMA key proxy (optional).
+    Proxy,
 }
 
 impl Provider {
-    pub const ALL: [Provider; 3] = [Provider::Gemini, Provider::Assemblyai, Provider::Sarvam];
+    pub const ALL: [Provider; 4] = [Provider::Gemini, Provider::Assemblyai, Provider::Sarvam, Provider::Proxy];
 
     fn account(self) -> &'static str {
         match self {
             Provider::Gemini => "gemini-api-key",
             Provider::Assemblyai => "assemblyai-api-key",
             Provider::Sarvam => "sarvam-api-key",
+            Provider::Proxy => "proxy-token",
         }
     }
 
@@ -33,6 +36,7 @@ impl Provider {
             Provider::Gemini => ["LUMA_GEMINI_API_KEY", "GEMINI_API_KEY"],
             Provider::Assemblyai => ["LUMA_ASSEMBLYAI_API_KEY", "ASSEMBLYAI_API_KEY"],
             Provider::Sarvam => ["LUMA_SARVAM_API_KEY", "SARVAM_API_KEY"],
+            Provider::Proxy => ["LUMA_PROXY_TOKEN", "LUMA_PROXY_TOKEN"],
         }
     }
 
@@ -41,6 +45,7 @@ impl Provider {
             Provider::Gemini => "Gemini",
             Provider::Assemblyai => "AssemblyAI",
             Provider::Sarvam => "Sarvam",
+            Provider::Proxy => "LUMA proxy",
         }
     }
 }
@@ -50,6 +55,8 @@ impl Provider {
 pub enum KeySource {
     Env,
     Keychain,
+    /// Provided by the configured LUMA key proxy.
+    Proxy,
 }
 
 /// Load `.env` files without overriding variables already set in the real
@@ -75,6 +82,9 @@ fn env_key(p: Provider) -> Option<String> {
 }
 
 pub fn key_source(p: Provider) -> Option<KeySource> {
+    if p != Provider::Proxy && luma_net::route::proxy().is_some() {
+        return Some(KeySource::Proxy);
+    }
     if env_key(p).is_some() {
         Some(KeySource::Env)
     } else if keychain_key(p).is_some() {
@@ -84,9 +94,21 @@ pub fn key_source(p: Provider) -> Option<KeySource> {
     }
 }
 
-/// `.env` / environment first, then the OS keychain.
+/// `.env` / environment first, then the OS keychain. With a key proxy
+/// configured, provider keys live on the proxy: a placeholder is returned
+/// and the network clients authenticate with the device token instead.
 pub fn get_key(p: Provider) -> Option<String> {
+    if p != Provider::Proxy && luma_net::route::proxy().is_some() {
+        return Some("via-luma-proxy".into());
+    }
     env_key(p).or_else(|| keychain_key(p))
+}
+
+/// Point the network clients at the proxy in `prefs` (or straight at the
+/// providers when none is set).
+pub fn apply_proxy(prefs: &Prefs) {
+    let token = env_key(Provider::Proxy).or_else(|| keychain_key(Provider::Proxy));
+    luma_net::route::set_proxy(token.map(|token| luma_net::route::Proxy { url: prefs.proxy_url.clone(), token }));
 }
 
 fn keychain_key(p: Provider) -> Option<String> {
@@ -128,14 +150,40 @@ pub struct Prefs {
     pub excluded_apps: Vec<String>,
     /// When paused, the hotkey does nothing and nothing is captured.
     pub paused: bool,
-    /// When to draw on screen: "long_press" (hold the shortcut ≥ long_press_ms),
-    /// "always", or "never". Voice-only turns use a smaller image (fewer tokens).
+    /// Drawing on screen. "auto": shortcut turns draw only when asked or
+    /// clearly useful, long-press turns always draw. "always" / "never".
     pub annotate: String,
+    /// Hold the trackpad/mouse still this long to point-and-ask.
     pub long_press_ms: u64,
+    /// Point-and-ask by long-pressing the trackpad/mouse.
+    pub gesture: bool,
+    /// Model for quick shortcut turns (speed first).
+    pub fast_model: String,
+    pub fast_thinking: String,
+    /// Snap boxes to the exact frames of native controls (Accessibility).
+    pub snap_to_elements: bool,
+    /// Re-check small marks (icons, thin rows) on a close-up crop.
+    pub refine_small: bool,
+    /// "standard" (speech-to-text → Gemini → voice, every feature) or "live"
+    /// (fast mode: Gemini Live native audio for questions; tasks and lessons
+    /// still use the standard pipeline).
+    pub voice_engine: String,
+    pub live_model: String,
+    /// Keep a speech-to-text session open for a few seconds after each
+    /// answer, so a follow-up question starts streaming instantly.
+    pub warm_stt: bool,
+    /// After an answer, listen hands-free for a few seconds for a follow-up
+    /// (the mic opens only once LUMA has stopped talking).
+    pub follow_up: bool,
+    /// Save lesson progress (text only) so "continue from where we left
+    /// off" works after quitting LUMA.
+    pub remember_lessons: bool,
     /// Let LUMA click and type to carry out tasks you ask for.
     pub can_act: bool,
     /// Upper bound on agent steps per task.
     pub max_task_steps: usize,
+    /// Optional LUMA key proxy (keys held by your team, not on this computer).
+    pub proxy_url: String,
 }
 
 impl Default for Prefs {
@@ -162,10 +210,21 @@ impl Default for Prefs {
             .map(String::from)
             .to_vec(),
             paused: false,
-            annotate: "long_press".into(),
-            long_press_ms: 1800,
+            annotate: "auto".into(),
+            long_press_ms: 2000,
+            gesture: true,
+            fast_model: "gemini-3.5-flash".into(),
+            fast_thinking: "minimal".into(),
+            snap_to_elements: true,
+            refine_small: true,
+            remember_lessons: false,
+            voice_engine: "standard".into(),
+            live_model: "gemini-3.8-live".into(),
+            warm_stt: true,
+            follow_up: false,
             can_act: true,
             max_task_steps: 25,
+            proxy_url: String::new(),
         }
     }
 }

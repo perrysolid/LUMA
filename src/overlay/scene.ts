@@ -3,11 +3,13 @@
 
 import {
   arrowBetween,
+  boundsOf,
   center,
   inflate,
   minVisible,
   overlapArea,
   placeLabel,
+  smoothPath,
   spotlightPath,
   type Pt,
   type Rect,
@@ -22,6 +24,9 @@ export type Annotation =
   | { op: "zoom"; display: number; rect: Rect }
   | { op: "focus"; display: number; id: string; rect: Rect }
   | { op: "label"; display: number; id: string; rect: Rect; text: string }
+  | { op: "board"; display: number; id: string; rect: Rect; title?: string | null }
+  | { op: "node"; display: number; id: string; rect: Rect; text: string }
+  | { op: "sketch"; display: number; id: string; points: Pt[]; closed: boolean; label?: string | null; color?: string | null }
   | { op: "clear"; id?: string | null };
 
 /** The companion pointer (see buddy.ts). */
@@ -89,6 +94,31 @@ export class Scene {
     private viewport: () => Rect = () => ({ x: 0, y: 0, w: window.innerWidth, h: window.innerHeight }),
   ) {}
 
+  /**
+   * Magnified inset for <zoom>: the real pixels around `rect`, captured at
+   * native resolution, shown 2-3x larger beside it.
+   */
+  magnify(rect: Rect, src: string) {
+    const vp = this.viewport();
+    const scale = Math.max(1.5, Math.min(3, (vp.w * 0.4) / Math.max(rect.w + 16, 1), (vp.h * 0.45) / Math.max(rect.h + 16, 1)));
+    const size = { w: Math.round((rect.w + 16) * scale), h: Math.round((rect.h + 16) * scale) };
+    const el = document.createElement("div");
+    el.className = "magnifier";
+    const img = document.createElement("img");
+    img.src = src;
+    img.alt = "";
+    el.appendChild(img);
+    const p = placeLabel(inflate(rect, 14), size, vp, this.obstacles("_magnifier"), 14);
+    Object.assign(el.style, { left: `${p.rect.x}px`, top: `${p.rect.y}px`, width: `${size.w}px`, height: `${size.h}px` });
+    this.labels.appendChild(el);
+    animate(el, [{ opacity: 0, transform: "scale(0.85)" }, { opacity: 1, transform: "none" }], {
+      duration: 260,
+      delay: 200,
+      easing: "cubic-bezier(.3,.7,.2,1)",
+    });
+    this.put("_magnifier", rect, [el], p.rect);
+  }
+
   /** Ids currently drawn (for tests / debugging). */
   ids(): string[] {
     return [...this.items.keys()];
@@ -112,6 +142,12 @@ export class Scene {
         return this.focus(a.id, a.rect);
       case "label":
         return this.callout(a.id, a.rect, a.text);
+      case "board":
+        return this.board(a.id, a.rect, a.title ?? undefined);
+      case "node":
+        return this.node(a.id, a.rect, a.text);
+      case "sketch":
+        return this.sketch(a.id, a.points, a.closed, a.label ?? undefined, a.color ?? undefined);
       case "clear":
         return a.id ? this.remove(a.id) : this.clear();
     }
@@ -154,14 +190,22 @@ export class Scene {
     return out;
   }
 
-  private label(text: string, target: Rect, ownerId: string, callout = false): { el: HTMLElement; rect: Rect } {
+  private label(
+    text: string,
+    target: Rect,
+    ownerId: string,
+    callout = false,
+    avoid: Rect[] = [],
+    hand?: string,
+  ): { el: HTMLElement; rect: Rect } {
     const el = document.createElement("div");
-    el.className = callout ? "label callout" : "label";
+    el.className = hand ? "label hand" : callout ? "label callout" : "label";
+    if (hand) el.style.color = hand;
     el.textContent = text;
     el.style.visibility = "hidden";
     this.labels.appendChild(el);
     const size = { w: el.offsetWidth || text.length * 8 + 20, h: el.offsetHeight || 26 };
-    const p = placeLabel(target, size, this.viewport(), this.obstacles(ownerId));
+    const p = placeLabel(target, size, this.viewport(), [...this.obstacles(ownerId), ...avoid]);
     el.style.left = `${p.rect.x}px`;
     el.style.top = `${p.rect.y}px`;
     el.style.visibility = "";
@@ -222,7 +266,16 @@ export class Scene {
     const nodes: Element[] = [g];
     let labelRect: Rect | undefined;
     if (text) {
-      const l = this.label(text, { x: a.mid.x - 1, y: a.mid.y - 1, w: 2, h: 2 }, id);
+      // the label sits beside the arrow, never on top of its own line
+      const along: Rect[] = [];
+      for (let i = 1; i < 12; i++) {
+        const t = i / 12;
+        const u = 1 - t;
+        const x = u * u * a.start.x + 2 * u * t * a.control.x + t * t * a.end.x;
+        const y = u * u * a.start.y + 2 * u * t * a.control.y + t * t * a.end.y;
+        along.push({ x: x - 4, y: y - 4, w: 8, h: 8 });
+      }
+      const l = this.label(text, { x: a.mid.x - 1, y: a.mid.y - 1, w: 2, h: 2 }, id, false, along);
       nodes.push(l.el);
       labelRect = l.rect;
     }
@@ -276,6 +329,81 @@ export class Scene {
     this.put(id, rect, nodes, labelRect);
   }
 
+  /**
+   * The area LUMA draws its own diagram in. See-through: it is an overlay
+   * on the user's screen, not a panel; only its title is drawn.
+   */
+  private board(id: string, rect: Rect, title?: string) {
+    const r = inflate(rect, 6);
+    const nodes: Element[] = [];
+    if (title) {
+      const t = document.createElement("div");
+      t.className = "board-title";
+      t.textContent = title;
+      Object.assign(t.style, { left: `${r.x + 18}px`, top: `${r.y + 10}px`, maxWidth: `${r.w - 36}px` });
+      this.labels.appendChild(t);
+      animate(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 260, delay: 120 });
+      nodes.push(t);
+    }
+    // a board is a backdrop: arrows and labels may cross it freely
+    this.put(id, { x: 0, y: 0, w: 0, h: 0 }, nodes);
+  }
+
+  /** A box with text in it, drawn on like a marker. */
+  private node(id: string, rect: Rect, text: string) {
+    const r = minVisible(rect, 28);
+    const g = svg("g", { class: "sk-node", "data-id": id }, this.layers.shapes);
+    const d = roundedRectPath(r, 12);
+    svg("path", { class: "node-fill", d }, g);
+    drawOn(svg("path", { class: "halo", d }, g), 520);
+    drawOn(svg("path", { class: "stroke", d }, g), 520);
+    const t = document.createElement("div");
+    t.className = "node-text";
+    t.textContent = text;
+    const size = Math.max(12, Math.min(22, r.h * 0.42, (r.w / Math.max(4, text.length)) * 1.8));
+    Object.assign(t.style, { left: `${r.x}px`, top: `${r.y}px`, width: `${r.w}px`, height: `${r.h}px`, fontSize: `${size}px` });
+    this.labels.appendChild(t);
+    // Fit: one line if it can be read that way, else wrap; shrink until it fits.
+    let fs = size;
+    t.style.whiteSpace = "nowrap";
+    while (fs > 14 && t.scrollWidth > t.clientWidth + 1) {
+      fs -= 1;
+      t.style.fontSize = `${fs}px`;
+    }
+    if (t.scrollWidth > t.clientWidth + 1) t.style.whiteSpace = "normal";
+    while (fs > 11 && (t.scrollWidth > t.clientWidth + 1 || t.scrollHeight > t.clientHeight + 1)) {
+      fs -= 1;
+      t.style.fontSize = `${fs}px`;
+    }
+    animate(t, [{ opacity: 0 }, { opacity: 1 }], { duration: 240, delay: 280 });
+    this.put(id, rect, [g, t]);
+  }
+
+  /** A smooth freehand stroke through points, drawn on like a marker. */
+  private sketch(id: string, points: Pt[], closed: boolean, text?: string, color?: string) {
+    if (points.length < 2) return;
+    const ink = MARKER[color ?? ""] ?? null;
+    const g = svg("g", { class: "sketch", "data-id": id }, this.layers.arrows);
+    if (ink) (g as SVGElement).style.setProperty("--marker", ink);
+    const d = smoothPath(points, closed);
+    const ms = Math.min(1100, 300 + points.length * 60);
+    drawOn(svg("path", { class: "halo", d }, g), ms);
+    drawOn(svg("path", { class: "stroke", d }, g), ms);
+    drawOn(svg("path", { class: "core", d }, g), ms);
+    const bounds = boundsOf(points);
+    const nodes: Element[] = [g];
+    let labelRect: Rect | undefined;
+    if (text) {
+      // beside the middle of the stroke, in handwriting, never on the line
+      const mid = points[Math.floor(points.length / 2)];
+      const along = points.map((p) => ({ x: p.x - 5, y: p.y - 5, w: 10, h: 10 }));
+      const l = this.label(text, closed ? inflate(bounds, 4) : { x: mid.x - 1, y: mid.y - 1, w: 2, h: 2 }, id, false, along, ink ?? "var(--accent-hand)");
+      nodes.push(l.el);
+      labelRect = l.rect;
+    }
+    this.put(id, bounds, nodes, labelRect);
+  }
+
   private callout(id: string, rect: Rect, text: string) {
     const l = this.label(text, inflate(rect, 6), id, true);
     this.put(id, rect, [l.el], l.rect);
@@ -326,6 +454,18 @@ export class Scene {
     this.items.set(id, { id, rect, nodes: [] });
   }
 }
+
+/** Marker colours for sketches; bright enough for dark and light screens. */
+const MARKER: Record<string, string> = {
+  green: "#7ee05a",
+  blue: "#5aa9ff",
+  purple: "#c06bff",
+  orange: "#ff8a3d",
+  pink: "#ff5ca8",
+  yellow: "#ffd23f",
+  white: "#f5f5f5",
+  red: "#ff4d4d",
+};
 
 function sameRect(a: Rect, b: Rect) {
   return Math.abs(a.x - b.x) < 1 && Math.abs(a.y - b.y) < 1 && Math.abs(a.w - b.w) < 1 && Math.abs(a.h - b.h) < 1;

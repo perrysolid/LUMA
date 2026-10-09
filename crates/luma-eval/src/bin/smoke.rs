@@ -55,6 +55,15 @@ async fn main() -> Result<()> {
     let _ = dotenvy::from_path(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.env"));
     let http = reqwest::Client::new();
     let mut ok = true;
+    // SMOKE_PROXY_URL + LUMA_PROXY_TOKEN: run the same loop through a LUMA key proxy.
+    let proxied = match (std::env::var("SMOKE_PROXY_URL"), std::env::var("LUMA_PROXY_TOKEN")) {
+        (Ok(url), Ok(token)) => {
+            println!("(through LUMA proxy at {url})");
+            luma_net::route::set_proxy(Some(luma_net::route::Proxy { url, token }));
+            true
+        }
+        _ => false,
+    };
 
     // 1. Gemini
     let gemini_key = key(&["LUMA_GEMINI_API_KEY", "GEMINI_API_KEY"]).context("LUMA_GEMINI_API_KEY missing")?;
@@ -117,6 +126,57 @@ async fn main() -> Result<()> {
         samples.len() as f64 / channels as f64 / rate as f64
     );
 
+    // 2b. Sarvam streaming (what the app uses for speech; not proxied)
+    if !proxied {
+        let cfg = luma_net::sarvam_ws::TtsConfig {
+            api_key: key(&["LUMA_SARVAM_API_KEY", "SARVAM_API_KEY"]).unwrap_or_default(),
+            speaker: "shubh".into(),
+            language: "en-IN".into(),
+            pace: 1.1,
+        };
+        let t = Instant::now();
+        match luma_net::sarvam_ws::open(&cfg).await {
+            Ok((stream, mut ev)) => {
+                let connect = t.elapsed().as_millis();
+                let t0 = Instant::now();
+                stream.say("This is the first sentence.");
+                stream.say("And this is the second one.");
+                let (mut first, mut ends, mut samples) = (None, 0, 0usize);
+                while let Ok(Some(e)) = tokio::time::timeout(Duration::from_secs(10), ev.recv()).await {
+                    match e {
+                        luma_net::sarvam_ws::TtsEvent::Audio(a) => {
+                            first.get_or_insert(t0.elapsed().as_millis());
+                            samples += a.len();
+                        }
+                        luma_net::sarvam_ws::TtsEvent::End => {
+                            ends += 1;
+                            if ends == 2 {
+                                break;
+                            }
+                        }
+                        luma_net::sarvam_ws::TtsEvent::Error(e) => {
+                            println!("✗ Sarvam stream error: {e}");
+                            ok = false;
+                            break;
+                        }
+                    }
+                }
+                let good = ends == 2 && samples > 0;
+                ok &= good;
+                println!(
+                    "{} Sarvam streaming: connect {connect} ms, first audio {} ms, {ends}/2 sentences, {:.1}s audio",
+                    if good { "✓" } else { "✗" },
+                    first.unwrap_or(0),
+                    samples as f64 / 24000.0
+                );
+            }
+            Err(e) => {
+                ok = false;
+                println!("✗ Sarvam streaming: {e:#}");
+            }
+        }
+    }
+
     // 3. AssemblyAI, fed the synthesized speech in real time (100 ms chunks)
     let Some(aai_key) = key(&["LUMA_ASSEMBLYAI_API_KEY", "ASSEMBLYAI_API_KEY"]) else {
         bail!("LUMA_ASSEMBLYAI_API_KEY missing");
@@ -126,7 +186,9 @@ async fn main() -> Result<()> {
     pcm.extend(std::iter::repeat(0).take(luma_net::STT_RATE as usize / 2)); // trailing silence
     let (atx, arx) = tokio::sync::mpsc::channel(64);
     let (etx, _erx) = tokio::sync::mpsc::unbounded_channel();
+    let (go_tx, go_rx) = tokio::sync::oneshot::channel::<()>();
     let feeder = tokio::spawn(async move {
+        let _ = go_rx.await;
         for chunk in pcm.chunks(1600) {
             if atx.send(i16_to_le_bytes(chunk)).await.is_err() {
                 break;
@@ -135,11 +197,25 @@ async fn main() -> Result<()> {
         }
     });
     let stt_model = std::env::args().nth(2).unwrap_or_else(|| "universal-3-5-pro".into());
-    let t2 = Instant::now();
-    let transcript = luma_net::assemblyai::transcribe(&aai_key, &stt_model, arx, etx).await;
-    feeder.abort();
+    // Exactly what the app does for a follow-up: open the session after the
+    // previous answer, leave it idle, then stream into it.
+    let tc = Instant::now();
+    let conn = luma_net::assemblyai::connect(&aai_key, &stt_model, false).await;
+    let connect_ms = tc.elapsed().as_millis();
+    let transcript = match conn {
+        Ok(conn) => {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            println!("  (AssemblyAI session opened in {connect_ms} ms, then left warm for 5 s)");
+            let t2 = Instant::now();
+            let _ = go_tx.send(());
+            let r = luma_net::assemblyai::transcribe_on(conn, arx, etx).await;
+            feeder.abort();
+            r.map(|t| (t, t2))
+        }
+        Err(e) => Err(e),
+    };
     match transcript {
-        Ok(t) => {
+        Ok((t, t2)) => {
             let said = words(&sentence);
             let heard = words(&t);
             let matched = said.iter().filter(|w| heard.contains(w)).count();
@@ -157,6 +233,72 @@ async fn main() -> Result<()> {
             println!("✗ AssemblyAI: {e:#}");
         }
     }
+    // 4. Gemini Live fast mode, driven exactly like the app: screen image
+    // turn, then push-to-talk speech (the Sarvam clip) between activity
+    // start/end; expect spoken audio back plus transcripts.
+    if std::env::var("SMOKE_SKIP_LIVE").is_err() && !proxied {
+        let live_model = std::env::var("LUMA_LIVE_MODEL").unwrap_or_else(|_| "gemini-3.8-live".into());
+        let cfg = luma_net::live::LiveConfig {
+            api_key: g.api_key.clone(),
+            model: live_model.clone(),
+            system: luma_core::prompt::live_system_prompt(true),
+            draw_tool: true,
+        };
+        let t = Instant::now();
+        match luma_net::live::open(&cfg).await {
+            Ok((session, mut events)) => {
+                let setup = t.elapsed().as_millis();
+                let png = image::open(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eval/out/editor.png"))?;
+                let mut jpeg = Vec::new();
+                png.resize(1600, 1600, image::imageops::FilterType::Triangle)
+                    .to_rgb8()
+                    .write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg)?;
+                session.send_image_turn(&jpeg, None);
+                session.activity_start();
+                let mut rs = MonoResampler::new(rate, channels, 16_000);
+                let speech = rs.process(&samples);
+                for chunk in speech.chunks(1600) {
+                    session.send_audio(&i16_to_le_bytes(chunk));
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+                let t_end = Instant::now();
+                session.activity_end();
+                let (mut heard, mut said, mut audio, mut first, mut draws) = (String::new(), String::new(), 0usize, None, 0);
+                let deadline = tokio::time::sleep(Duration::from_secs(25));
+                tokio::pin!(deadline);
+                loop {
+                    tokio::select! {
+                        _ = &mut deadline => break,
+                        e = events.recv() => match e {
+                            None => break,
+                            Some(luma_net::live::LiveEvent::Audio(a)) => { first.get_or_insert(t_end.elapsed().as_millis()); audio += a.len(); }
+                            Some(luma_net::live::LiveEvent::InputText(t)) => heard.push_str(&t),
+                            Some(luma_net::live::LiveEvent::OutputText(t)) => said.push_str(&t),
+                            Some(luma_net::live::LiveEvent::ToolCall { id, name, .. }) => { draws += 1; session.tool_response(&id, &name); }
+                            Some(luma_net::live::LiveEvent::TurnComplete) if audio > 0 => break,
+                            Some(luma_net::live::LiveEvent::Error(e)) => { println!("  live error: {e}"); break; }
+                            Some(_) => {}
+                        }
+                    }
+                }
+                let good = audio > 0;
+                ok &= good;
+                println!(
+                    "{} Gemini Live ({live_model}): setup {setup} ms, first audio {} ms after speech ended, {:.1}s audio, {draws} draw calls\n  heard: \"{}\"\n  said: \"{}\"",
+                    if good { "✓" } else { "✗" },
+                    first.unwrap_or(0),
+                    audio as f64 / 24000.0,
+                    heard.trim(),
+                    said.trim()
+                );
+            }
+            Err(e) => {
+                ok = false;
+                println!("✗ Gemini Live: {e:#}");
+            }
+        }
+    }
+
     if ok {
         println!("\nAll providers OK — voice loop verified end to end.");
         Ok(())

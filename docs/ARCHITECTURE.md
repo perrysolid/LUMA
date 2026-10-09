@@ -97,6 +97,37 @@ item ids, labels and geometry, scoped to the app and window they were made in.
 That is enough for "the one you just explained". Screenshots and audio are
 dropped after each turn.
 
+**Grounding is layered, cheapest first.** The model's box is refined by, in
+order: an accessibility hit test (AX / UI Automation frames, `luma_core::snap`),
+on-device OCR lines for text highlights (`src-tauri/src/ocr.rs`), and for marks
+under 24 pt that nothing snapped, a second fast model call on a native-resolution
+crop (`luma_core::refine`) whose answer replaces the mark when it is consistent,
+even after it is on screen. Each layer keeps the model's box when unsure.
+
+**Teaching and acting are loops over fresh screenshots.** A lesson
+(`luma_core::lesson` + `src-tauri/src/lesson.rs`) and a task (`agent.rs`) both
+ask for exactly one move per screenshot. Lessons spend nothing while the user
+works (64×40 thumbnail diffs) and ask again only after the screen changes and
+settles. Tasks press controls through accessibility first, verify typed text by
+reading the field back, and keep a log for "what did you change?" / "undo that".
+
+**Fast mode is a second engine, not a fork.** Gemini Live
+(`luma-net/src/live.rs`, `src-tauri/src/live_turn.rs`) replaces STT + LLM + TTS
+for questions. Native audio cannot carry inline tags, so drawing is a
+non-blocking `draw` function whose arguments mirror the tag vocabulary and go
+through the same `Resolver`, overlay and session memory.
+
+**Marks are shown first and made exact later.** The model's geometry goes on
+screen as soon as it streams in. Snapping (AX, OCR) and refining run in the
+background and swap the mark in place, so no OS call or second model request
+ever delays speech. Freehand traces are snapped onto the real ink in the
+capture before they are shown (a few ms), and only where ink runs along them.
+
+**Freehand diagrams use the same pipeline.** `<board>`, `<node>` and `<sketch>`
+are tags like any other: resolved to view space, remembered by id (so `<arrow>`
+connects nodes), and drawn by the overlay `Scene` with a whiteboard backdrop and
+draw-on animation. Arrows that name a node not drawn yet wait in the resolver.
+
 ## Privacy model
 
 - LUMA captures only while the hotkey is held or a typed question is sent, and
@@ -107,5 +138,10 @@ dropped after each turn.
   one is in front, nothing is captured.
 - Overlays are content-protected (`NSWindowSharingNone` /
   `WDA_EXCLUDEFROMCAPTURE`), so LUMA's own drawings never enter the screenshots.
-- No screenshots or audio are written to disk. Logs never contain keys,
+- Password fields (AX secure text fields, UIA `IsPassword`) are painted black
+  in every capture before it is encoded or sent.
+- No screenshots or audio are written to disk. The one exception is the
+  on-device speech fallback, which hands the turn's audio to macOS Speech as a
+  temporary file and deletes it right after. Logs never contain keys,
   transcripts or images.
+- With the optional key proxy, provider keys never reach the device at all.

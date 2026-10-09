@@ -7,8 +7,9 @@
 //! (vision model today; accessibility frames, OCR snapping or an app plugin
 //! tomorrow).
 
-use crate::geometry::{norm_to_view, Display, DisplayRect, NormBox, Rect, SentImage};
+use crate::geometry::{norm_to_view, Display, DisplayRect, NormBox, Point, Rect, SentImage};
 use crate::markup::Tag;
+use crate::snap::SnapKind;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -35,8 +36,73 @@ pub enum Annotation {
     Focus { display: usize, id: String, rect: Rect },
     /// Free-standing text callout anchored at a target.
     Label { display: usize, id: String, rect: Rect, text: String },
+    /// Whiteboard panel for a diagram LUMA draws itself.
+    Board { display: usize, id: String, rect: Rect, title: Option<String> },
+    /// A box with text in it: one element of LUMA's own diagram.
+    Node { display: usize, id: String, rect: Rect, text: String },
+    /// A freehand stroke through points (curves, brackets, loops, circling).
+    Sketch { display: usize, id: String, points: Vec<Point>, closed: bool, label: Option<String>, color: Option<String> },
     Clear { id: Option<String> },
 }
+
+impl Annotation {
+    /// The id of a mark that occupies a place on screen.
+    pub fn id(&self) -> Option<&str> {
+        match self {
+            Annotation::Shape { id, .. }
+            | Annotation::Point { id, .. }
+            | Annotation::Arrow { id, .. }
+            | Annotation::Step { id, .. }
+            | Annotation::Focus { id, .. }
+            | Annotation::Label { id, .. }
+            | Annotation::Board { id, .. }
+            | Annotation::Node { id, .. }
+            | Annotation::Sketch { id, .. } => Some(id),
+            _ => None,
+        }
+    }
+
+    /// The display a mark is drawn on (None for clear).
+    pub fn display(&self) -> Option<usize> {
+        match self {
+            Annotation::Shape { display, .. }
+            | Annotation::Point { display, .. }
+            | Annotation::Arrow { display, .. }
+            | Annotation::Step { display, .. }
+            | Annotation::Spotlight { display, .. }
+            | Annotation::Zoom { display, .. }
+            | Annotation::Focus { display, .. }
+            | Annotation::Label { display, .. }
+            | Annotation::Board { display, .. }
+            | Annotation::Node { display, .. }
+            | Annotation::Sketch { display, .. } => Some(*display),
+            Annotation::Clear { .. } => None,
+        }
+    }
+
+    /// The single target rect of a shape, point or step.
+    pub fn target(&self) -> Option<(usize, Rect)> {
+        match self {
+            Annotation::Shape { display, rect, .. }
+            | Annotation::Point { display, rect, .. }
+            | Annotation::Step { display, rect, .. } => Some((*display, *rect)),
+            _ => None,
+        }
+    }
+
+    /// The same mark with a refined target rect.
+    pub fn with_rect(&self, r: Rect) -> Annotation {
+        let mut a = self.clone();
+        match &mut a {
+            Annotation::Shape { rect, .. } | Annotation::Point { rect, .. } | Annotation::Step { rect, .. } => *rect = r,
+            _ => {}
+        }
+        a
+    }
+}
+
+/// Marker colours a sketch may use (the overlay maps them to a palette).
+pub const SKETCH_COLORS: &[&str] = &["green", "blue", "purple", "orange", "pink", "yellow", "white", "red"];
 
 /// A target the model has marked during this session.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -53,6 +119,10 @@ pub struct ResolveError {
     pub reason: String,
 }
 
+/// Refines a resolved rect (e.g. accessibility snapping). Returns the better
+/// rect, or None to keep the model's.
+pub type Snapper<'a> = Box<dyn FnMut(&DisplayRect, Option<&str>, SnapKind) -> Option<Rect> + Send + 'a>;
+
 /// Resolves tags against the images sent this turn and the ids known so far.
 pub struct Resolver<'a> {
     pub displays: &'a [Display],
@@ -61,6 +131,15 @@ pub struct Resolver<'a> {
     pub items: HashMap<String, MarkedItem>,
     pub turn: u32,
     auto_id: u32,
+    snapper: Option<Snapper<'a>>,
+    /// Whether the last resolved mark was snapped to an accessibility frame.
+    pub last_snapped: bool,
+    /// Arrows naming ids that are not marked yet ("browser → server" said
+    /// before the server node is drawn); resolved as soon as they exist.
+    deferred: Vec<Tag>,
+    /// A board moved off busy content: marks the model placed inside its
+    /// original area move with it.
+    shift: Option<(DisplayRect, Point)>,
 }
 
 impl<'a> Resolver<'a> {
@@ -71,15 +150,52 @@ impl<'a> Resolver<'a> {
             items: prior.into_iter().map(|m| (m.id.clone(), m)).collect(),
             turn,
             auto_id: 0,
+            snapper: None,
+            last_snapped: false,
+            deferred: Vec::new(),
+            shift: None,
+        }
+    }
+
+    pub fn with_snapper(mut self, f: Snapper<'a>) -> Self {
+        self.snapper = Some(f);
+        self
+    }
+
+    /// Model geometry, refined by the snapper when one is set: elements snap
+    /// to accessibility frames, highlights and underlines to text lines.
+    fn snapped(&mut self, tag: &Tag, at: DisplayRect, label: Option<&str>) -> DisplayRect {
+        let kind = match tag.name.as_str() {
+            "box" | "circle" | "step" => SnapKind::Area,
+            "point" => SnapKind::Point,
+            "highlight" | "underline" => SnapKind::Text,
+            _ => return at,
+        };
+        let label = label.or(tag.attr("text"));
+        match self.snapper.as_mut().and_then(|f| f(&at, label, kind)) {
+            Some(rect) => {
+                self.last_snapped = true;
+                DisplayRect { display_index: at.display_index, rect }
+            }
+            None => at,
+        }
+    }
+
+    /// Replace a remembered item's geometry (after a refine pass).
+    pub fn update_item(&mut self, id: &str, at: DisplayRect) {
+        if let Some(m) = self.items.get_mut(id) {
+            m.at = at;
         }
     }
 
     pub fn resolve(&mut self, tag: &Tag) -> Result<Annotation, ResolveError> {
+        self.last_snapped = false;
         let err = |reason: &str| ResolveError { tag: tag.name.clone(), reason: reason.to_string() };
         let label = tag.attr("label").filter(|s| !s.trim().is_empty()).map(str::to_string);
         match tag.name.as_str() {
             "box" | "circle" | "highlight" | "underline" | "point" => {
                 let at = self.geometry(tag)?;
+                let at = self.snapped(tag, at, label.as_deref());
                 let id = self.id_for(tag);
                 self.remember(&id, label.clone(), at);
                 let (display, rect) = (at.display_index, at.rect);
@@ -100,6 +216,13 @@ impl<'a> Resolver<'a> {
                 })
             }
             "arrow" => {
+                let waits_for_id = |k: &str| {
+                    tag.attr(k).is_some_and(|v| !self.items.contains_key(v) && parse_numbers(v).len() < 2 && !v.trim().is_empty())
+                };
+                if (waits_for_id("from") || waits_for_id("to")) && self.deferred.len() < 16 {
+                    self.deferred.push(tag.clone());
+                    return Err(err("waiting for its ids to be marked"));
+                }
                 let from = self.endpoint(tag, "from")?;
                 let to = self.endpoint(tag, "to")?;
                 if from.display_index != to.display_index {
@@ -113,7 +236,10 @@ impl<'a> Resolver<'a> {
                     .attr("n")
                     .and_then(|s| s.trim().parse().ok())
                     .ok_or_else(|| err("step needs n"))?;
-                let at = self.target_or_geometry(tag)?;
+                let mut at = self.target_or_geometry(tag)?;
+                if tag.attr("target").is_none() {
+                    at = self.snapped(tag, at, label.as_deref());
+                }
                 let id = self.id_for(tag);
                 if tag.attr("box").is_some() {
                     self.remember(&id, label.clone(), at);
@@ -144,11 +270,101 @@ impl<'a> Resolver<'a> {
                 let id = self.id_for(tag);
                 Ok(Annotation::Label { display: at.display_index, id, rect: at.rect, text })
             }
+            "board" => {
+                let at = self.geometry(tag)?;
+                let id = self.id_for(tag);
+                let title = tag.attr("title").or(tag.attr("label")).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
+                self.remember(&id, title.clone(), at);
+                Ok(Annotation::Board { display: at.display_index, id, rect: at.rect, title })
+            }
+            "node" => {
+                let at = self.geometry(tag)?;
+                let text = tag
+                    .attr("text")
+                    .or(tag.attr("label"))
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .ok_or_else(|| err("node needs text"))?
+                    .to_string();
+                let id = self.id_for(tag);
+                self.remember(&id, Some(text.clone()), at);
+                Ok(Annotation::Node { display: at.display_index, id, rect: at.rect, text })
+            }
+            "sketch" => {
+                let raw = tag.attr("path").or(tag.attr("points")).ok_or_else(|| err("sketch needs path"))?;
+                let n = parse_numbers(raw);
+                if n.len() < 4 || n.len() % 2 != 0 || n.len() > 400 {
+                    return Err(err(&format!("bad path {raw:?}")));
+                }
+                let (img, d) = self.image(tag)?;
+                let points: Vec<Point> = n
+                    .chunks(2)
+                    .filter_map(|p| NormBox::from_point(p[0], p[1]))
+                    .map(|b| norm_to_view(&b, img, d).rect.center())
+                    .collect();
+                let display = d.index;
+                let points: Vec<Point> = match self.shift {
+                    Some(_) => {
+                        let (x0, y0) = points.iter().fold((f64::MAX, f64::MAX), |(a, b), p| (a.min(p.x), b.min(p.y)));
+                        let (x1, y1) = points.iter().fold((f64::MIN, f64::MIN), |(a, b), p| (a.max(p.x), b.max(p.y)));
+                        let at = DisplayRect { display_index: display, rect: Rect::new(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)) };
+                        let moved = self.shifted(at);
+                        let (dx, dy) = (moved.rect.x - at.rect.x, moved.rect.y - at.rect.y);
+                        points.into_iter().map(|p| Point::new(p.x + dx, p.y + dy)).collect()
+                    }
+                    None => points,
+                };
+                let (x0, y0) = points.iter().fold((f64::MAX, f64::MAX), |(a, b), p| (a.min(p.x), b.min(p.y)));
+                let (x1, y1) = points.iter().fold((f64::MIN, f64::MIN), |(a, b), p| (a.max(p.x), b.max(p.y)));
+                let id = self.id_for(tag);
+                self.remember(&id, label.clone(), DisplayRect { display_index: display, rect: Rect::new(x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0)) });
+                let closed = tag.attr("closed").is_some_and(|c| c == "true");
+                let color = tag.attr("color").map(|c| c.trim().to_lowercase()).filter(|c| SKETCH_COLORS.contains(&c.as_str()));
+                Ok(Annotation::Sketch { display, id, points, closed, label, color })
+            }
             "clear" => Ok(Annotation::Clear {
                 id: tag.attr("target").or(tag.attr("id")).map(str::to_string),
             }),
             _ => Err(err("unknown tag")),
         }
+    }
+
+    /// Move everything the model places inside `from` by `by` (a board that
+    /// was relocated to empty space, with its diagram).
+    pub fn shift_region(&mut self, from: DisplayRect, by: Point) {
+        self.shift = Some((from, by));
+    }
+
+    fn shifted(&self, at: DisplayRect) -> DisplayRect {
+        match self.shift {
+            Some((from, by)) if from.display_index == at.display_index => {
+                let r = from.rect;
+                let grown = Rect::new(r.x - r.w * 0.05, r.y - r.h * 0.05, r.w * 1.1, r.h * 1.1);
+                if grown.contains(at.rect.center()) {
+                    DisplayRect { display_index: at.display_index, rect: Rect::new(at.rect.x + by.x, at.rect.y + by.y, at.rect.w, at.rect.h) }
+                } else {
+                    at
+                }
+            }
+            _ => at,
+        }
+    }
+
+    /// Deferred arrows whose ids now exist. Call after each `resolve`.
+    pub fn take_ready(&mut self) -> Vec<Annotation> {
+        let waiting = std::mem::take(&mut self.deferred);
+        let mut out = Vec::new();
+        for t in waiting {
+            let known = |k: &str| t.attr(k).is_some_and(|v| self.items.contains_key(v) || parse_numbers(v).len() >= 2);
+            if known("from") && known("to") {
+                if let Ok(a) = self.resolve(&t) {
+                    out.push(a);
+                }
+            } else {
+                self.deferred.push(t);
+            }
+        }
+        out
     }
 
     fn id_for(&mut self, tag: &Tag) -> String {
@@ -194,7 +410,7 @@ impl<'a> Resolver<'a> {
         }
         .ok_or_else(|| ResolveError { tag: tag.name.clone(), reason: format!("bad box {raw:?}") })?;
         let (img, d) = self.image(tag)?;
-        Ok(norm_to_view(&nb, img, d))
+        Ok(self.shifted(norm_to_view(&nb, img, d)))
     }
 
     fn target_or_geometry(&self, tag: &Tag) -> Result<DisplayRect, ResolveError> {
@@ -222,9 +438,9 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Accepts "1 2 3 4", "[1, 2, 3, 4]", "1,2,3,4".
+/// Accepts "1 2 3 4", "[1, 2, 3, 4]", "1,2,3,4", and paths like "1 2; 3 4".
 fn parse_numbers(s: &str) -> Vec<f64> {
-    s.split(|c: char| c.is_whitespace() || c == ',' || c == '[' || c == ']')
+    s.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '[' | ']' | '(' | ')'))
         .filter(|p| !p.is_empty())
         .filter_map(|p| p.parse().ok())
         .collect()
@@ -334,6 +550,100 @@ mod tests {
         ) {
             assert!(r.resolve(&t).is_err(), "{t:?}");
         }
+    }
+
+    #[test]
+    fn snapper_sees_elements_and_text_spans_but_not_known_ids() {
+        let ds = [display()];
+        let cap = Capture { display_index: 0, width_px: 2000, height_px: 1000 };
+        let imgs = [SentImage::full(cap, 1000)];
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        let mut r = Resolver::new(&ds, &imgs, vec![], 1).with_snapper(Box::new(move |_, label, kind| {
+            seen.lock().unwrap().push((label.map(str::to_string), kind));
+            (kind != SnapKind::Text).then(|| Rect::new(1.0, 2.0, 3.0, 4.0))
+        }));
+        let out: Vec<_> = tags(
+            r#"<box id="a" box="0 0 100 100" label="Save"/><highlight box="0 0 10 10"/>
+               <step n="1" target="a"/><point box="5 5"/>"#,
+        )
+        .iter()
+        .map(|t| r.resolve(t).unwrap())
+        .collect();
+        assert!(matches!(&out[0], Annotation::Shape { rect, .. } if *rect == Rect::new(1.0, 2.0, 3.0, 4.0)));
+        assert!(matches!(&out[1], Annotation::Shape { rect, .. } if *rect != Rect::new(1.0, 2.0, 3.0, 4.0)));
+        assert_eq!(r.items["a"].at.rect, Rect::new(1.0, 2.0, 3.0, 4.0));
+        assert_eq!(
+            *calls.lock().unwrap(),
+            vec![(Some("Save".to_string()), SnapKind::Area), (None, SnapKind::Text), (None, SnapKind::Point)]
+        );
+    }
+
+    #[test]
+    fn own_diagrams_resolve_boards_nodes_arrows_and_sketches() {
+        let ds = [display()];
+        let cap = Capture { display_index: 0, width_px: 2000, height_px: 1000 };
+        let imgs = [SentImage::full(cap, 1000)];
+        let mut r = Resolver::new(&ds, &imgs, vec![], 1);
+        let out: Vec<_> = tags(
+            r#"<board id="b" box="100 500 900 950" title="How DNS works"/>
+               <node id="browser" box="200 550 300 700" text="Browser"/>
+               <node id="dns" box="200 780 300 930" text="DNS resolver"/>
+               <arrow from="browser" to="dns" label="asks"/>
+               <sketch id="loop" path="400 600; 450 650; 400 700" closed="true" label="cache"/>"#,
+        )
+        .iter()
+        .map(|t| r.resolve(t).unwrap())
+        .collect();
+        assert!(matches!(&out[0], Annotation::Board { title: Some(t), .. } if t == "How DNS works"));
+        assert!(matches!(&out[1], Annotation::Node { text, rect, .. } if text == "Browser" && *rect == Rect::new(550.0, 100.0, 150.0, 50.0)));
+        assert!(matches!(&out[3], Annotation::Arrow { .. }), "arrows connect nodes by id");
+        match &out[4] {
+            Annotation::Sketch { points, closed, .. } => {
+                assert_eq!(points.len(), 3);
+                assert!(*closed);
+                assert!((points[1].x - 650.0).abs() < 1.5 && (points[1].y - 225.0).abs() < 1.5, "{:?}", points[1]);
+            }
+            o => panic!("{o:?}"),
+        }
+        for bad in [r#"<node box="1 2 3 4"/>"#, r#"<sketch path="1 2 3"/>"#] {
+            assert!(r.resolve(&tags(bad)[0]).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_moved_board_takes_its_diagram_with_it() {
+        let ds = [display()];
+        let cap = Capture { display_index: 0, width_px: 2000, height_px: 1000 };
+        let imgs = [SentImage::full(cap, 1000)];
+        let mut r = Resolver::new(&ds, &imgs, vec![], 1);
+        let board = match r.resolve(&tags(r#"<board id="b" box="0 0 500 500" title="T"/>"#)[0]).unwrap() {
+            Annotation::Board { rect, .. } => rect,
+            o => panic!("{o:?}"),
+        };
+        // the app moved it 500 points right
+        r.shift_region(DisplayRect { display_index: 0, rect: board }, Point::new(500.0, 0.0));
+        let ts = tags(r#"<node id="n" box="100 100 200 300" text="A"/><sketch path="300 100; 400 200"/><box box="700 700 800 800"/>"#);
+        assert!(matches!(r.resolve(&ts[0]).unwrap(), Annotation::Node { rect, .. } if rect.x == 600.0));
+        assert!(matches!(r.resolve(&ts[1]).unwrap(), Annotation::Sketch { points, .. } if (points[0].x - 600.0).abs() < 1.5));
+        assert!(matches!(r.resolve(&ts[2]).unwrap(), Annotation::Shape { rect, .. } if rect.x == 700.0), "outside the board: unmoved");
+    }
+
+    #[test]
+    fn arrows_to_nodes_not_drawn_yet_wait_for_them() {
+        let ds = [display()];
+        let cap = Capture { display_index: 0, width_px: 2000, height_px: 1000 };
+        let imgs = [SentImage::full(cap, 1000)];
+        let mut r = Resolver::new(&ds, &imgs, vec![], 1);
+        let ts = tags(r#"<node id="a" box="100 100 200 300" text="A"/><arrow from="a" to="b" label="x"/><node id="b" box="100 600 200 800" text="B"/>"#);
+        assert!(r.resolve(&ts[0]).is_ok());
+        assert!(r.take_ready().is_empty());
+        assert!(r.resolve(&ts[1]).is_err(), "b does not exist yet");
+        assert!(r.take_ready().is_empty());
+        assert!(r.resolve(&ts[2]).is_ok());
+        let ready = r.take_ready();
+        assert!(matches!(ready.as_slice(), [Annotation::Arrow { label: Some(l), .. }] if l == "x"));
+        assert!(r.take_ready().is_empty(), "emitted once");
     }
 
     #[test]

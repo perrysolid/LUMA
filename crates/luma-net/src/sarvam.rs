@@ -35,10 +35,11 @@ impl SarvamTts {
             "speech_sample_rate": 24000,
             "enable_preprocessing": true,
         });
+        let target = crate::route::sarvam("text-to-speech", &self.api_key);
         let r = self
             .client
-            .post("https://api.sarvam.ai/text-to-speech")
-            .header("api-subscription-key", &self.api_key)
+            .post(&target.url)
+            .header(target.header.0, &target.header.1)
             .json(&body)
             .send()
             .await?;

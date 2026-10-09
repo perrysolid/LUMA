@@ -1,4 +1,4 @@
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { Buddy } from "./buddy";
 import { Hud, type Phase } from "./hud";
 import { Scene, type Annotation } from "./scene";
@@ -30,6 +30,9 @@ listen<Annotation>("luma://annotate", (e) => {
   if (a.op === "clear" || a.display === DISPLAY) scene.apply(a);
 });
 listen("luma://clear", () => scene.clear());
+listen<{ display: number; rect: { x: number; y: number; w: number; h: number }; src: string }>("luma://magnify", (e) => {
+  if (e.payload.display === DISPLAY) scene.magnify(e.payload.rect, e.payload.src);
+});
 listen<Status>("luma://status", (e) => {
   const s = e.payload;
   hudHere = (s.display ?? 0) === DISPLAY;
@@ -57,3 +60,21 @@ listen<"annotate" | "voice">("luma://mode", (e) => {
     hud.setPhase("listening", "Annotate mode: I'll draw on screen");
   }
 });
+
+// Health report for the logs: WebKit can pause animation frames in a window
+// it thinks is hidden (transparent overlays). Movement no longer depends on
+// them, but this says when it happens. Sent on change only.
+let lastHealth = "";
+function reportHealth() {
+  let fired = false;
+  requestAnimationFrame(() => (fired = true));
+  setTimeout(() => {
+    const h = `visibility=${document.visibilityState} frames=${fired ? "running" : "paused"}`;
+    if (h !== lastHealth) {
+      lastHealth = h;
+      emit("luma://overlay-health", { display: DISPLAY, health: h });
+    }
+  }, 1000);
+}
+reportHealth();
+setInterval(reportHealth, 15000);

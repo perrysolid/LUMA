@@ -36,12 +36,23 @@ pub struct TaskState {
     pub display_index: Option<usize>,
     pub step: usize,
     pub last_changed: Option<bool>,
+    /// App the task last acted in (for "undo that").
+    pub app: String,
 }
 
 impl TaskState {
     pub fn new(goal: String, display_index: Option<usize>) -> Self {
-        Self { goal, history: Vec::new(), display_index, step: 0, last_changed: None }
+        Self { goal, history: Vec::new(), display_index, step: 0, last_changed: None, app: String::new() }
     }
+}
+
+/// What the last task did, for "what did you change?" and "undo that".
+#[derive(Debug, Clone, Default)]
+pub struct TaskLog {
+    pub goal: String,
+    pub actions: Vec<String>,
+    pub app: String,
+    pub outcome: String,
 }
 
 #[derive(Debug, Clone)]
@@ -99,8 +110,8 @@ async fn run_inner(
 
     if let Some(pa) = approved {
         let before = capture_thumb(app, task.display_index).await.ok();
-        execute(app, &pa.action, task.display_index).await?;
-        task.history.push(pa.action.describe() + " (approved by the user)");
+        let note = execute(app, &pa.action, task.display_index).await?;
+        task.history.push(with_note(pa.action.describe() + " (approved by the user)", note));
         task.last_changed = settle(app, task.display_index, before).await;
     }
 
@@ -134,6 +145,7 @@ async fn run_inner(
             return Ok(());
         }
         let before = thumbnail(&raw.full);
+        task.app = snap.window.app.clone();
 
         // ---- decide
         let ctx = agent_context(&AgentContext {
@@ -195,6 +207,7 @@ async fn run_inner(
                 c.speak(app, epoch, question).await;
                 c.set_pending(Pending::Answer { task: task.clone() });
                 c.status(app, Phase::Waiting, Some(format!("{question} (hold the shortcut to answer)")));
+                c.listen_for_reply_when_quiet(app, epoch);
                 return Ok(());
             }
             _ => {}
@@ -215,6 +228,7 @@ async fn run_inner(
                 task.history.push(format!("refused to {} (secret); asked the user to do it", pa.action.describe()));
                 c.set_pending(Pending::Answer { task: task.clone() });
                 c.status(app, Phase::Waiting, Some(q.into()));
+                c.listen_for_reply_when_quiet(app, epoch);
                 return Ok(());
             }
             Risk::NeedsApproval => {
@@ -222,6 +236,7 @@ async fn run_inner(
                 c.speak(app, epoch, &q).await;
                 c.set_pending(Pending::Approval { task: task.clone(), action: pa });
                 c.status(app, Phase::Waiting, Some(format!("{q} (hold the shortcut to answer)")));
+                c.listen_for_reply_when_quiet(app, epoch);
                 return Ok(());
             }
             Risk::Safe => {}
@@ -232,8 +247,8 @@ async fn run_inner(
         if !c.current(epoch) {
             return Ok(());
         }
-        execute(app, &pa.action, task.display_index).await?;
-        task.history.push(pa.action.describe());
+        let note = execute(app, &pa.action, task.display_index).await?;
+        task.history.push(with_note(pa.action.describe(), note));
         task.last_changed = settle(app, task.display_index, Some(before)).await;
     }
     let msg = format!("I tried {max_steps} steps without finishing, so I stopped. Tell me if you want me to keep going.");
@@ -241,6 +256,13 @@ async fn run_inner(
     record(app, task, "stopped at the step limit");
     c.finish_when_quiet(app, epoch);
     Ok(())
+}
+
+fn with_note(line: String, note: Option<String>) -> String {
+    match note {
+        Some(n) => format!("{line} ({n})"),
+        None => line,
+    }
 }
 
 /// Speech is everything outside the first action tag.
@@ -288,10 +310,12 @@ fn show_target(app: &AppHandle, a: &Action, step: usize) {
     }
 }
 
-async fn execute(app: &AppHandle, a: &Action, display_index: Option<usize>) -> Result<()> {
+/// Run one action. Returns a note for the history (how it was done, or what
+/// verification found).
+async fn execute(app: &AppHandle, a: &Action, display_index: Option<usize>) -> Result<Option<String>> {
     let a = a.clone();
     let app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || -> Result<()> {
+    tauri::async_runtime::spawn_blocking(move || -> Result<Option<String>> {
         let displays = screen::displays()?;
         let to_input = |r: &luma_core::geometry::DisplayRect| {
             displays
@@ -302,8 +326,31 @@ async fn execute(app: &AppHandle, a: &Action, display_index: Option<usize>) -> R
         };
         let _ = (&app, display_index);
         match &a {
-            Action::Click { at, button, double, .. } => input::click(to_input(at)?, *button, *double),
-            Action::Type { text, clear_first } => input::type_text(text, *clear_first),
+            Action::Click { at, button, double, .. } => {
+                let p = to_input(at)?;
+                // Accessibility press first: exact, and immune to overlapping
+                // windows or a target that moved by a few pixels. The cursor
+                // still glides there so the user sees what is happening.
+                if *button == luma_core::action::MouseButton::Left && !*double {
+                    input::glide_to(p)?;
+                    if crate::ax::press_at(p) {
+                        return Ok(Some("via accessibility".into()));
+                    }
+                }
+                input::click(p, *button, *double)
+            }
+            Action::Type { text, clear_first } => {
+                input::type_text(text, *clear_first)?;
+                std::thread::sleep(Duration::from_millis(120));
+                // Check the text landed in the focused field.
+                return Ok(crate::ax::focused_value().map(|v| {
+                    if v.contains(text.as_str()) {
+                        "verified: the field now contains it".to_string()
+                    } else {
+                        "the focused field does NOT show this text; it may have gone elsewhere".to_string()
+                    }
+                }));
+            }
             Action::Key { keys } => input::press_keys(keys),
             Action::Scroll { at, down, amount } => input::scroll(at.as_ref().map(&to_input).transpose()?, *down, *amount),
             Action::Open { url } => input::open_url(url),
@@ -313,6 +360,7 @@ async fn execute(app: &AppHandle, a: &Action, display_index: Option<usize>) -> R
             }
             Action::Ask { .. } | Action::Done { .. } | Action::Fail { .. } => Ok(()),
         }
+        .map(|()| None)
     })
     .await
     .map_err(|e| anyhow!("{e}"))?
@@ -352,6 +400,12 @@ async fn settle(app: &AppHandle, display_index: Option<usize>, before: Option<Ve
 fn record(app: &AppHandle, task: &TaskState, outcome: &str) {
     let steps = if task.history.is_empty() { "no actions".to_string() } else { task.history.join("; ") };
     let st = app.state::<AppState>();
+    st.companion.set_last_task(TaskLog {
+        goal: task.goal.clone(),
+        actions: task.history.clone(),
+        app: task.app.clone(),
+        outcome: outcome.to_string(),
+    });
     st.session.lock().unwrap().record(
         Turn {
             user: format!("(task) {}", task.goal),

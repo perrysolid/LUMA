@@ -126,5 +126,14 @@ document.getElementById("final")!.addEventListener("click", () => {
 });
 document.getElementById("clear")!.addEventListener("click", reset);
 
-// `#final` renders the last frame immediately (used for headless screenshots).
+// `#final` renders the last frame immediately (used for headless screenshots);
+// `#clean` is the same without the spotlight dimming.
 if (location.hash === "#final") requestAnimationFrame(() => document.getElementById("final")!.click());
+if (location.hash === "#clean")
+  requestAnimationFrame(() => {
+    reset();
+    hud.setPhase("speaking");
+    const beats = script();
+    beats.forEach((b) => b.marks.filter((m) => m.op !== "spotlight").forEach((m) => scene.apply(m)));
+    hud.setSub(beats[beats.length - 1].say);
+  });

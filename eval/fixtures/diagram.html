@@ -37,6 +37,7 @@
         { "id": "diagram-flow-beginner", "kind": "flow", "q": "Explain this architecture to me like I'm a beginner.",
           "expect": ["client", "gateway", "auth", "orders", "db", "queue", "email"],
           "order": ["client", "gateway", "orders", "queue", "email"] },
+        { "id": "draws-arrows-flow", "kind": "draws", "q": "Draw arrows showing how an order moves from the web client to the database.", "ops": ["arrow"] },
         { "id": "diagram-this-queue", "kind": "refer", "q": "What is this?", "pointer": "queue", "expect": ["queue"] },
         { "id": "diagram-where-db", "kind": "locate", "q": "Where is the database on this slide?", "expect": ["db"] },
         { "id": "diagram-only-auth", "kind": "locate", "q": "Explain only the part that checks who the user is.", "expect": ["auth"] }
